@@ -1,0 +1,82 @@
+[
+  {
+    "id": "PR001",
+    "name": "Smartphone XYZ",
+    "description": "Un smartphone haut de gamme avec écran OLED de 6,5 pouces et caméra triple objectif",
+    "price": 799.99,
+    "idCategorie": "CAT-ELEC",
+    "nomCategorie": "Électronique"
+  },
+  {
+    "id": "PR002",
+    "name": "Ordinateur portable ABC",
+    "description": "Ordinateur portable léger avec processeur i7 et 16 Go de RAM",
+    "price": 1299.99,
+    "idCategorie": "CAT-ELEC",
+    "nomCategorie": "Électronique"
+  },
+  {
+    "id": "PR003",
+    "name": "Chaise de bureau ergonomique",
+    "description": "Chaise de bureau confortable avec support lombaire ajustable",
+    "price": 249.99,
+    "idCategorie": "CAT-MEUB",
+    "nomCategorie": "Mobilier"
+  },
+  {
+    "id": "PR004",
+    "name": "Casque audio sans fil",
+    "description": "Casque bluetooth avec réduction de bruit active",
+    "price": 199.99,
+    "idCategorie": "CAT-ELEC",
+    "nomCategorie": "Électronique"
+  },
+  {
+    "id": "PR005",
+    "name": "Livre 'Le guide du développeur Java'",
+    "description": "Manuel complet pour apprendre et maîtriser Java",
+    "price": 39.99,
+    "idCategorie": "CAT-LIV",
+    "nomCategorie": "Livres"
+  },
+  {
+    "id": "PR006",
+    "name": "Machine à café automatique",
+    "description": "Machine à café avec broyeur intégré et 15 bars de pression",
+    "price": 599.99,
+    "idCategorie": "CAT-ELECM",
+    "nomCategorie": "Électroménager"
+  },
+  {
+    "id": "PR007",
+    "name": "Sac à dos pour ordinateur portable",
+    "description": "Sac à dos spacieux avec compartiment rembourré pour ordinateur jusqu'à 15 pouces",
+    "price": 79.99,
+    "idCategorie": "CAT-ACC",
+    "nomCategorie": "Accessoires"
+  },
+  {
+    "id": "PR008",
+    "name": "Montre connectée Sport+",
+    "description": "Montre intelligente avec GPS intégré et suivi de la fréquence cardiaque",
+    "price": 299.99,
+    "idCategorie": "CAT-ELEC",
+    "nomCategorie": "Électronique"
+  },
+  {
+    "id": "PR009",
+    "name": "Enceinte bluetooth portable",
+    "description": "Enceinte waterproof avec 20 heures d'autonomie",
+    "price": 129.99,
+    "idCategorie": "CAT-ELEC",
+    "nomCategorie": "Électronique"
+  },
+  {
+    "id": "PR010",
+    "name": "Lampe de bureau LED",
+    "description": "Lampe de bureau ajustable avec différents modes d'éclairage",
+    "price": 49.99,
+    "idCategorie": "CAT-MEUB",
+    "nomCategorie": "Mobilier"
+  }
+]

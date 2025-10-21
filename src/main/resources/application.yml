@@ -1,0 +1,30 @@
+server:
+  port: 8083
+spring:
+  profiles:
+    active: prod
+  application:
+    name: CategorieService
+  # Configuration du service mail
+  mail:
+    host: mailer.gov.bf
+    port: 587
+    username: etraduction@diplomatie.gov.bf
+    password: 'EtraductionBit**2024'
+    protocol: smtp
+    properties.mail.smtp:
+      auth: true
+      starttls.enable: true
+      ssl.trust: ${spring.mail.host}
+    test-connection: false
+
+# Configuration personnalisée
+app:
+  storage:
+    path: ./datas
+  security:
+    attempts:
+      # En nombre de minutes
+      timeout: 5
+      # Nombre de tentatives autorisées.
+      max: 5

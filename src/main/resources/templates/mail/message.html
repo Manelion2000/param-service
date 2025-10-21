@@ -1,0 +1,158 @@
+<html lang="fr" xmlns:th="http://www.w3.org/1999/xhtml">
+<head>
+    <style>
+        .yt-body {
+            position: relative;
+            background-color: #ecf0f3;
+            color: black;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        .yt-email-body {
+            background: linear-gradient(60deg, #ffffff 80%, #1B5E20 100%);
+            text-align: center;
+            margin: auto;
+            padding: 20px;
+            width: 60%;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .yt-logo-container {
+            width: 96px;
+            height: 96px;
+            margin: 20px auto;
+        }
+
+        .yt-img {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .yt-title {
+            color: #1B5E20;
+            font-size: xx-large;
+            margin: 10px 0;
+        }
+
+        hr {
+            border-color: #1B5E20;
+            margin: 20px 0;
+        }
+
+        .yt-content {
+            text-align: left;
+            color: black;
+            margin: 20px 0;
+        }
+
+        .yt-message {
+            text-align: justify;
+            line-height: 1.6;
+            margin: 20px 0;
+        }
+
+        .yt-button {
+            display: inline-block;
+            background-color: #1B5E20;
+            color: white;
+            padding: 10px 20px;
+            margin: 20px 0;
+            text-decoration: none;
+            border-radius: 5px;
+            transition: background-color 0.3s ease;
+        }
+
+        .yt-button:hover {
+            background-color: #145214;
+        }
+
+        .yt-email-footer {
+            background: linear-gradient(213deg, #ffffff 66.6%, #1B5E20 100%);
+            text-align: center;
+            margin: auto;
+            padding: 10px;
+            width: 60%;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            font-size: small;
+            margin-top: 40px;
+        }
+
+        .yt-email-footer p {
+            margin: 10px 0;
+        }
+
+        .yt-email-footer a {
+            color: #1B5E20;
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+
+        .yt-email-footer a:hover {
+            color: #145214;
+        }
+
+        /* Styles pour le mode sombre */
+        @media (prefers-color-scheme: dark) {
+            .yt-body {
+                background-color: #1c1c1e;
+                color: #ffffff;
+            }
+
+            .yt-email-body {
+                background: #2e2e2e;
+                color: #ffffff;
+            }
+
+            .yt-email-footer {
+                background: #2e2e2e;
+                color: white;
+            }
+
+            .yt-title {
+                color: white;
+            }
+
+            hr {
+                border-color: white;
+            }
+        }
+
+        @media all and (max-width: 580px) {
+            .yt-email-body,
+            .yt-email-footer {
+                width: 90%;
+                padding: 20px;
+            }
+        }
+
+    </style>
+    <title>MINISTRE</title>
+</head>
+<body class="yt-body">
+<div class="yt-email-body">
+    <div class="yt-logo-container">
+        <img class="yt-img" alt="Logo" src="#"/>
+    </div>
+    <b class="yt-title yt-header-title">MINISTERE DES AFFAIRES ETRANGERES</b>
+    <hr/>
+    <div class="yt-content">
+        <h3>Bonjour,</h3>
+        <div class="yt-message" th:utext="${msg}">
+        </div>
+    </div>
+</div>
+<br/>
+
+<div class="yt-email-footer">
+    <br/>
+    <br/>
+    <i>Copyright &copy; <span th:text="${#calendars.format(#calendars.createNow(), 'yyyy')}">2024</span></i>
+</div>
+</body>

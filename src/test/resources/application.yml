@@ -1,0 +1,33 @@
+server:
+  port: 8083
+spring:
+  application:
+    name: CategorieService
+  datasource:
+    url: jdbc:h2:mem:test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driverClassName: org.h2.Driver
+  # Configuration du service mail
+  mail:
+    host: mailer.xxx.bf
+    port: 587
+    username: contact@mailer.gov
+    password: test
+    protocol: smtp
+    properties.mail.smtp:
+      auth: true
+      starttls.enable: true
+      ssl.trust: ${spring.mail.host}
+    test-connection: false
+  profiles:
+    active: dev
+
+# Configuration personnalisée
+app:
+  storage:
+    path: ./datas
+  security:
+    attempts:
+      # En nombre de minutes
+      timeout: 5
+      # Nombre de tentatives autorisées.
+      max: 5
