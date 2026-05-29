@@ -1,0 +1,16 @@
+package com.bakouan.app.enums;
+
+public enum ReconciliationResultType {
+    MATCH_OK,
+    DEBIT_A_TORT,
+    CREDIT_SANS_DEBIT,
+    ECHEC_DES_DEUX_COTES,
+    ABSENT_COTE_MOOV,
+    ABSENT_COTE_ORANGE,
+    ABSENT_COTE_BANQUE,
+    MONTANT_DIFFERENT,
+    DOUBLON_BANQUE,
+    DOUBLON_MOOV,
+    STATUT_INCONNU
+}
+

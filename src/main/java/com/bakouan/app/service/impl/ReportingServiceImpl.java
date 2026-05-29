@@ -1,0 +1,550 @@
+package com.bakouan.app.service.impl;
+
+import com.bakouan.app.dto.dashboard.*;
+import com.bakouan.app.enums.OperatorType;
+import com.bakouan.app.enums.ReconciliationResultType;
+import com.bakouan.app.model.ReconciliationResult;
+import com.bakouan.app.model.ReconciliationRun;
+import com.bakouan.app.model.BankTransaction;
+import com.bakouan.app.model.MoovTransaction;
+import com.bakouan.app.model.OrangeTransaction;
+import com.bakouan.app.repositories.BankTransactionRepository;
+import com.bakouan.app.repositories.MoovTransactionRepository;
+import com.bakouan.app.repositories.OrangeTransactionRepository;
+import com.bakouan.app.repositories.ReconciliationResultRepository;
+import com.bakouan.app.repositories.ReconciliationRunRepository;
+import com.bakouan.app.service.ReportingService;
+import lombok.RequiredArgsConstructor;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.font.PDFont;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.temporal.TemporalAdjusters;
+import java.util.*;
+import java.util.stream.Collectors;
+
+@Service
+@RequiredArgsConstructor
+public class ReportingServiceImpl implements ReportingService {
+
+    private static final int MAX_DETAILS_JSON = 300;
+
+    private final ReconciliationRunRepository runRepository;
+    private final ReconciliationResultRepository resultRepository;
+    private final BankTransactionRepository bankTransactionRepository;
+    private final MoovTransactionRepository moovTransactionRepository;
+    private final OrangeTransactionRepository orangeTransactionRepository;
+
+    @Override
+    public ReportingSummaryDto buildSummary(ReportingPeriodType periodType, LocalDate referenceDate, OperatorType channel) {
+        ReportWindow window = resolveWindow(periodType, referenceDate);
+        ReportData data = loadData(window, channel);
+        return toSummary(periodType, referenceDate, window, channel, data, MAX_DETAILS_JSON);
+    }
+
+    @Override
+    public byte[] exportExcel(ReportingPeriodType periodType, LocalDate referenceDate, OperatorType channel) {
+        ReportWindow window = resolveWindow(periodType, referenceDate);
+        ReportData data = loadData(window, channel);
+        ReportingSummaryDto summary = toSummary(periodType, referenceDate, window, channel, data, Integer.MAX_VALUE);
+
+        try (XSSFWorkbook workbook = new XSSFWorkbook(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            buildSummarySheet(workbook.createSheet("Synthese"), summary);
+            buildDistributionSheet(workbook.createSheet("Distribution"), summary.distribution());
+            buildDailySheet(workbook.createSheet("Journalier"), summary.dailyBreakdown());
+            buildDetailsSheet(workbook.createSheet("Transactions"), summary.transactionDetails());
+            workbook.write(output);
+            return output.toByteArray();
+        } catch (IOException e) {
+            throw new IllegalStateException("Impossible de generer le rapport Excel", e);
+        }
+    }
+
+    @Override
+    public byte[] exportPdf(ReportingPeriodType periodType, LocalDate referenceDate, OperatorType channel) {
+        ReportWindow window = resolveWindow(periodType, referenceDate);
+        ReportData data = loadData(window, channel);
+        ReportingSummaryDto summary = toSummary(periodType, referenceDate, window, channel, data, 80);
+
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage(PDRectangle.A4);
+            document.addPage(page);
+            PDPageContentStream stream = new PDPageContentStream(document, page);
+            PDFont fontRegular = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
+            PDFont fontBold = new PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD);
+
+            float y = 800f;
+            y = writeLine(stream, 40, y, fontBold, 14, "Rapport Reconciliation");
+            y = writeLine(stream, 40, y, fontRegular, 10,
+                    "Canal: " + channel + " | Periode: " + summary.dateFrom() + " -> " + summary.dateTo());
+            y = writeLine(stream, 40, y - 4, fontBold, 11, "KPI Principaux");
+            ReportingKpiDto k = summary.kpis();
+            y = writeLine(stream, 40, y, fontRegular, 10,
+                    "Transactions: " + k.totalTransactions() + " | Match: " + k.matchingCount() + " | Anomalies: " + k.anomalyCount());
+            y = writeLine(stream, 40, y, fontRegular, 10,
+                    "Success rate: " + k.successRate() + "% | Anomaly rate: " + k.anomalyRate() + "%");
+            y = writeLine(stream, 40, y, fontRegular, 10,
+                    "Montant Banque: " + k.montantTotalBanque() + " | Montant Operateur: " + k.montantTotalOperateur());
+            y = writeLine(stream, 40, y, fontRegular, 10,
+                    "Ecart global: " + k.ecartGlobal() + " | Montant anomalies: " + k.montantAnomalies());
+            y = writeLine(stream, 40, y - 4, fontBold, 11, "Synthese Executive");
+            for (String insight : buildExecutiveInsights(summary)) {
+                y = writeLine(stream, 40, y, fontRegular, 10, "- " + insight);
+            }
+
+            y = writeLine(stream, 40, y - 4, fontBold, 11, "Top Details Transactions");
+
+            int maxLines = 24;
+            int index = 1;
+            for (ReportingTransactionDetailDto d : summary.transactionDetails()) {
+                if (index > maxLines) {
+                    break;
+                }
+                String line = index + ". " + d.businessDate() + " | " + safe(d.transactionKey()) + " | "
+                        + d.resultType() + " | " + d.amountDifference();
+                y = writeLine(stream, 40, y, fontRegular, 9, line);
+                index++;
+            }
+
+            stream.close();
+            document.save(output);
+            return output.toByteArray();
+        } catch (IOException e) {
+            throw new IllegalStateException("Impossible de generer le rapport PDF", e);
+        }
+    }
+
+    private ReportingSummaryDto toSummary(ReportingPeriodType periodType,
+                                          LocalDate referenceDate,
+                                          ReportWindow window,
+                                          OperatorType channel,
+                                          ReportData data,
+                                          int maxDetails) {
+        List<ReportingRow> rows = data.rows();
+        Map<DashboardResultTypeView, Long> distribution = buildDistribution(rows, channel);
+        List<ReportingDailyBreakdownDto> daily = buildDailyBreakdown(rows, window);
+        ReportingKpiDto kpis = buildKpis(rows, channel, daily);
+        List<ReportingTransactionDetailDto> details = rows.stream()
+                .sorted(Comparator.comparing(ReportingRow::transactionDate, Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(r -> r.result().getCreatedAt(), Comparator.nullsLast(Comparator.reverseOrder())))
+                .limit(maxDetails)
+                .map(r -> toDetail(r, channel))
+                .toList();
+
+        return new ReportingSummaryDto(
+                periodType,
+                referenceDate,
+                window.from(),
+                window.to(),
+                channel,
+                OffsetDateTime.now(),
+                kpis,
+                Arrays.stream(DashboardResultTypeView.values())
+                        .map(v -> new ResultDistributionDto(v, distribution.getOrDefault(v, 0L)))
+                        .filter(d -> d.count() > 0)
+                        .toList(),
+                daily,
+                details
+        );
+    }
+
+    private ReportData loadData(ReportWindow window, OperatorType channel) {
+        List<ReconciliationRun> runs = runRepository.findByOperator(channel, Pageable.unpaged()).getContent();
+        List<Long> runIds = runs.stream().map(ReconciliationRun::getId).toList();
+        if (runIds.isEmpty()) {
+            return new ReportData(List.of());
+        }
+        List<ReconciliationResult> results = resultRepository.findByRunIdIn(runIds);
+        return new ReportData(enrichByTransactionDate(results, channel, window));
+    }
+
+    private ReportingKpiDto buildKpis(List<ReportingRow> rows, OperatorType channel, List<ReportingDailyBreakdownDto> daily) {
+        long total = rows.size();
+        long match = count(rows, ReconciliationResultType.MATCH_OK);
+        long anomalies = total - match;
+        long debitATort = count(rows, ReconciliationResultType.DEBIT_A_TORT);
+        long creditSansDebit = count(rows, ReconciliationResultType.CREDIT_SANS_DEBIT);
+        long absentBanque = count(rows, ReconciliationResultType.ABSENT_COTE_BANQUE);
+        long absentOperateur = count(rows, channel == OperatorType.MOOV ? ReconciliationResultType.ABSENT_COTE_MOOV : ReconciliationResultType.ABSENT_COTE_ORANGE);
+        long montantDifferent = count(rows, ReconciliationResultType.MONTANT_DIFFERENT);
+        long doublons = count(rows, ReconciliationResultType.DOUBLON_BANQUE) + count(rows, ReconciliationResultType.DOUBLON_MOOV);
+        long statutInconnu = count(rows, ReconciliationResultType.STATUT_INCONNU);
+
+        BigDecimal bankTotal = sum(rows, r -> r.result().getBankAmount());
+        BigDecimal operatorTotal = sum(rows, r -> r.result().getMoovAmount());
+        BigDecimal anomaliesAmount = rows.stream()
+                .filter(r -> r.result().getResultType() != ReconciliationResultType.MATCH_OK)
+                .map(r -> anomalyAmount(r.result()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal avgDaily = daily.isEmpty()
+                ? BigDecimal.ZERO
+                : BigDecimal.valueOf(total).divide(BigDecimal.valueOf(daily.size()), 2, RoundingMode.HALF_UP);
+        LocalVolumePeakDto peak = daily.stream()
+                .max(Comparator.comparingLong(ReportingDailyBreakdownDto::totalTransactions))
+                .map(d -> new LocalVolumePeakDto(d.businessDate(), d.totalTransactions()))
+                .orElse(new LocalVolumePeakDto(null, 0));
+
+        return new ReportingKpiDto(
+                total,
+                match,
+                anomalies,
+                rate(match, total),
+                rate(anomalies, total),
+                debitATort,
+                creditSansDebit,
+                absentBanque,
+                absentOperateur,
+                montantDifferent,
+                doublons,
+                statutInconnu,
+                bankTotal,
+                operatorTotal,
+                anomaliesAmount,
+                bankTotal.subtract(operatorTotal),
+                avgDaily,
+                peak
+        );
+    }
+
+    private List<ReportingDailyBreakdownDto> buildDailyBreakdown(List<ReportingRow> rows, ReportWindow window) {
+        Map<LocalDate, List<ReportingRow>> byDay = rows.stream()
+                .filter(r -> r.transactionDate() != null)
+                .collect(Collectors.groupingBy(ReportingRow::transactionDate));
+
+        List<ReportingDailyBreakdownDto> points = new ArrayList<>();
+        LocalDate cursor = window.from();
+        while (!cursor.isAfter(window.to())) {
+            List<ReportingRow> dayRows = byDay.getOrDefault(cursor, List.of());
+            long total = dayRows.size();
+            long match = count(dayRows, ReconciliationResultType.MATCH_OK);
+            long anomaly = total - match;
+            BigDecimal bank = sum(dayRows, r -> r.result().getBankAmount());
+            BigDecimal operator = sum(dayRows, r -> r.result().getMoovAmount());
+            points.add(new ReportingDailyBreakdownDto(
+                    cursor,
+                    total,
+                    match,
+                    anomaly,
+                    rate(match, total),
+                    bank,
+                    operator,
+                    bank.subtract(operator)
+            ));
+            cursor = cursor.plusDays(1);
+        }
+        return points;
+    }
+
+    private Map<DashboardResultTypeView, Long> buildDistribution(List<ReportingRow> rows, OperatorType channel) {
+        Map<DashboardResultTypeView, Long> distribution = new EnumMap<>(DashboardResultTypeView.class);
+        for (ReportingRow row : rows) {
+            DashboardResultTypeView view = toViewType(row.result().getResultType(), channel);
+            distribution.put(view, distribution.getOrDefault(view, 0L) + 1L);
+        }
+        return distribution;
+    }
+
+    private DashboardResultTypeView toViewType(ReconciliationResultType type, OperatorType channel) {
+        return switch (type) {
+            case MATCH_OK -> DashboardResultTypeView.MATCH_OK;
+            case DEBIT_A_TORT -> DashboardResultTypeView.DEBIT_A_TORT;
+            case CREDIT_SANS_DEBIT -> DashboardResultTypeView.CREDIT_SANS_DEBIT;
+            case ECHEC_DES_DEUX_COTES -> DashboardResultTypeView.ECHEC_DES_DEUX_COTES;
+            case ABSENT_COTE_BANQUE -> DashboardResultTypeView.ABSENT_COTE_BANQUE;
+            case ABSENT_COTE_MOOV, ABSENT_COTE_ORANGE -> DashboardResultTypeView.ABSENT_COTE_OPERATEUR;
+            case MONTANT_DIFFERENT -> DashboardResultTypeView.MONTANT_DIFFERENT;
+            case STATUT_INCONNU -> DashboardResultTypeView.STATUT_INCONNU;
+            case DOUBLON_BANQUE, DOUBLON_MOOV -> DashboardResultTypeView.DOUBLONS;
+        };
+    }
+
+    private ReportingTransactionDetailDto toDetail(ReportingRow row, OperatorType channel) {
+        ReconciliationResult r = row.result();
+        String direction;
+        if (r.getBankTransactionId() != null && r.getMoovTransactionId() == null) {
+            direction = "BANQUE -> " + channel;
+        } else if (r.getBankTransactionId() == null && r.getMoovTransactionId() != null) {
+            direction = channel + " -> BANQUE";
+        } else {
+            direction = "BANQUE <-> " + channel;
+        }
+        return new ReportingTransactionDetailDto(
+                row.transactionDate(),
+                r.getTransactionKey(),
+                toViewType(r.getResultType(), channel),
+                direction,
+                r.getBankStatusRaw(),
+                r.getMoovStatusRaw(),
+                r.getBankAmount(),
+                r.getMoovAmount(),
+                r.getAmountDifference(),
+                r.getReason()
+        );
+    }
+
+    private void buildSummarySheet(Sheet sheet, ReportingSummaryDto summary) {
+        int rowIdx = 0;
+        rowIdx = writeKv(sheet, rowIdx, "Canal", String.valueOf(summary.channel()));
+        rowIdx = writeKv(sheet, rowIdx, "Type periode", String.valueOf(summary.periodType()));
+        rowIdx = writeKv(sheet, rowIdx, "Date debut", String.valueOf(summary.dateFrom()));
+        rowIdx = writeKv(sheet, rowIdx, "Date fin", String.valueOf(summary.dateTo()));
+        ReportingKpiDto k = summary.kpis();
+        rowIdx++;
+        rowIdx = writeKv(sheet, rowIdx, "Total transactions", k.totalTransactions());
+        rowIdx = writeKv(sheet, rowIdx, "Matching", k.matchingCount());
+        rowIdx = writeKv(sheet, rowIdx, "Anomalies", k.anomalyCount());
+        rowIdx = writeKv(sheet, rowIdx, "Success rate (%)", k.successRate());
+        rowIdx = writeKv(sheet, rowIdx, "Anomaly rate (%)", k.anomalyRate());
+        rowIdx = writeKv(sheet, rowIdx, "Montant banque", k.montantTotalBanque());
+        rowIdx = writeKv(sheet, rowIdx, "Montant operateur", k.montantTotalOperateur());
+        rowIdx = writeKv(sheet, rowIdx, "Montant anomalies", k.montantAnomalies());
+        rowIdx = writeKv(sheet, rowIdx, "Ecart global", k.ecartGlobal());
+        rowIdx = writeKv(sheet, rowIdx, "Moyenne journaliere", k.moyenneJournaliereTransactions());
+        rowIdx = writeKv(sheet, rowIdx, "Pic volume (date)", k.picVolumeJournalier().businessDate());
+        writeKv(sheet, rowIdx, "Pic volume (count)", k.picVolumeJournalier().totalTransactions());
+        sheet.autoSizeColumn(0);
+        sheet.autoSizeColumn(1);
+    }
+
+    private void buildDistributionSheet(Sheet sheet, List<ResultDistributionDto> distribution) {
+        Row header = sheet.createRow(0);
+        header.createCell(0).setCellValue("Type resultat");
+        header.createCell(1).setCellValue("Count");
+        int i = 1;
+        for (ResultDistributionDto d : distribution) {
+            Row row = sheet.createRow(i++);
+            row.createCell(0).setCellValue(String.valueOf(d.resultType()));
+            row.createCell(1).setCellValue(d.count());
+        }
+        sheet.autoSizeColumn(0);
+        sheet.autoSizeColumn(1);
+    }
+
+    private void buildDailySheet(Sheet sheet, List<ReportingDailyBreakdownDto> daily) {
+        Row header = sheet.createRow(0);
+        header.createCell(0).setCellValue("Date");
+        header.createCell(1).setCellValue("Transactions");
+        header.createCell(2).setCellValue("Matching");
+        header.createCell(3).setCellValue("Anomalies");
+        header.createCell(4).setCellValue("SuccessRate");
+        header.createCell(5).setCellValue("MontantBanque");
+        header.createCell(6).setCellValue("MontantOperateur");
+        header.createCell(7).setCellValue("Ecart");
+        int i = 1;
+        for (ReportingDailyBreakdownDto d : daily) {
+            Row row = sheet.createRow(i++);
+            row.createCell(0).setCellValue(String.valueOf(d.businessDate()));
+            row.createCell(1).setCellValue(d.totalTransactions());
+            row.createCell(2).setCellValue(d.matchingCount());
+            row.createCell(3).setCellValue(d.anomalyCount());
+            row.createCell(4).setCellValue(d.successRate().doubleValue());
+            row.createCell(5).setCellValue(d.montantBanque().doubleValue());
+            row.createCell(6).setCellValue(d.montantOperateur().doubleValue());
+            row.createCell(7).setCellValue(d.ecart().doubleValue());
+        }
+    }
+
+    private void buildDetailsSheet(Sheet sheet, List<ReportingTransactionDetailDto> details) {
+        Row header = sheet.createRow(0);
+        header.createCell(0).setCellValue("Date");
+        header.createCell(1).setCellValue("TransactionKey");
+        header.createCell(2).setCellValue("ResultType");
+        header.createCell(3).setCellValue("Direction");
+        header.createCell(4).setCellValue("BankStatus");
+        header.createCell(5).setCellValue("OperatorStatus");
+        header.createCell(6).setCellValue("BankAmount");
+        header.createCell(7).setCellValue("OperatorAmount");
+        header.createCell(8).setCellValue("AmountDiff");
+        header.createCell(9).setCellValue("Reason");
+        int i = 1;
+        for (ReportingTransactionDetailDto d : details) {
+            Row row = sheet.createRow(i++);
+            row.createCell(0).setCellValue(String.valueOf(d.businessDate()));
+            row.createCell(1).setCellValue(safe(d.transactionKey()));
+            row.createCell(2).setCellValue(String.valueOf(d.resultType()));
+            row.createCell(3).setCellValue(safe(d.direction()));
+            row.createCell(4).setCellValue(safe(d.bankStatus()));
+            row.createCell(5).setCellValue(safe(d.operatorStatus()));
+            row.createCell(6).setCellValue(d.bankAmount() == null ? 0 : d.bankAmount().doubleValue());
+            row.createCell(7).setCellValue(d.operatorAmount() == null ? 0 : d.operatorAmount().doubleValue());
+            row.createCell(8).setCellValue(d.amountDifference() == null ? 0 : d.amountDifference().doubleValue());
+            row.createCell(9).setCellValue(safe(d.reason()));
+        }
+    }
+
+    private int writeKv(Sheet sheet, int rowIdx, String key, Object value) {
+        Row row = sheet.createRow(rowIdx);
+        row.createCell(0).setCellValue(key);
+        row.createCell(1).setCellValue(value == null ? "" : String.valueOf(value));
+        return rowIdx + 1;
+    }
+
+    private float writeLine(PDPageContentStream stream, float x, float y, PDFont font, int size, String text) throws IOException {
+        stream.beginText();
+        stream.setFont(font, size);
+        stream.newLineAtOffset(x, y);
+        stream.showText(text.length() > 140 ? text.substring(0, 140) : text);
+        stream.endText();
+        return y - (size + 4);
+    }
+
+    private BigDecimal rate(long count, long total) {
+        if (total <= 0) {
+            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        }
+        return BigDecimal.valueOf(count)
+                .multiply(BigDecimal.valueOf(100))
+                .divide(BigDecimal.valueOf(total), 2, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal sum(List<ReportingRow> rows, java.util.function.Function<ReportingRow, BigDecimal> getter) {
+        return rows.stream().map(getter).filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private long count(List<ReportingRow> rows, ReconciliationResultType type) {
+        return rows.stream().filter(r -> r.result().getResultType() == type).count();
+    }
+
+    private BigDecimal anomalyAmount(ReconciliationResult row) {
+        if (row.getAmountDifference() != null) {
+            return row.getAmountDifference().abs();
+        }
+        if (row.getBankAmount() != null && row.getMoovAmount() != null) {
+            return row.getBankAmount().subtract(row.getMoovAmount()).abs();
+        }
+        if (row.getBankAmount() != null) {
+            return row.getBankAmount().abs();
+        }
+        if (row.getMoovAmount() != null) {
+            return row.getMoovAmount().abs();
+        }
+        return BigDecimal.ZERO;
+    }
+
+    private boolean inRange(LocalDate date, LocalDate from, LocalDate to) {
+        if (date == null) {
+            return false;
+        }
+        return !date.isBefore(from) && !date.isAfter(to);
+    }
+
+    private ReportWindow resolveWindow(ReportingPeriodType periodType, LocalDate referenceDate) {
+        LocalDate ref = referenceDate == null ? LocalDate.now() : referenceDate;
+        return switch (periodType) {
+            case DAY -> new ReportWindow(ref, ref);
+            case WEEK -> {
+                LocalDate from = ref.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+                LocalDate to = ref.with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY));
+                yield new ReportWindow(from, to);
+            }
+            case MONTH -> {
+                LocalDate from = ref.withDayOfMonth(1);
+                LocalDate to = ref.withDayOfMonth(ref.lengthOfMonth());
+                yield new ReportWindow(from, to);
+            }
+        };
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
+    }
+
+    private List<ReportingRow> enrichByTransactionDate(List<ReconciliationResult> results, OperatorType channel, ReportWindow window) {
+        Set<Long> bankIds = results.stream().map(ReconciliationResult::getBankTransactionId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<Long> operatorIds = results.stream().map(ReconciliationResult::getMoovTransactionId).filter(Objects::nonNull).collect(Collectors.toSet());
+
+        Map<Long, LocalDate> bankDates = bankTransactionRepository.findAllById(bankIds).stream()
+                .filter(t -> t.getTransactionDate() != null)
+                .collect(Collectors.toMap(BankTransaction::getId, t -> t.getTransactionDate().toLocalDate(), (a, b) -> a));
+
+        Map<Long, LocalDate> operatorDates = new HashMap<>();
+        if (channel == OperatorType.MOOV) {
+            operatorDates.putAll(moovTransactionRepository.findAllById(operatorIds).stream()
+                    .map(t -> Map.entry(t.getId(), t.getCompletionTime() != null ? t.getCompletionTime().toLocalDate() :
+                            (t.getInitiationTime() != null ? t.getInitiationTime().toLocalDate() : null)))
+                    .filter(e -> e.getValue() != null)
+                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (a, b) -> a)));
+        } else {
+            operatorDates.putAll(orangeTransactionRepository.findAllById(operatorIds).stream()
+                    .filter(t -> t.getTransactionDateTime() != null)
+                    .collect(Collectors.toMap(OrangeTransaction::getId, t -> t.getTransactionDateTime().toLocalDate(), (a, b) -> a)));
+        }
+
+        List<ReportingRow> enriched = new ArrayList<>();
+        for (ReconciliationResult result : results) {
+            LocalDate txDate = resolveTransactionDate(result, bankDates, operatorDates);
+            if (inRange(txDate, window.from(), window.to())) {
+                enriched.add(new ReportingRow(result, txDate));
+            }
+        }
+        return enriched;
+    }
+
+    private LocalDate resolveTransactionDate(ReconciliationResult result, Map<Long, LocalDate> bankDates, Map<Long, LocalDate> operatorDates) {
+        if (result.getBankTransactionId() != null) {
+            LocalDate bank = bankDates.get(result.getBankTransactionId());
+            if (bank != null) {
+                return bank;
+            }
+        }
+        if (result.getMoovTransactionId() != null) {
+            LocalDate operator = operatorDates.get(result.getMoovTransactionId());
+            if (operator != null) {
+                return operator;
+            }
+        }
+        return result.getBusinessDate();
+    }
+
+    private List<String> buildExecutiveInsights(ReportingSummaryDto summary) {
+        ReportingKpiDto k = summary.kpis();
+        List<String> insights = new ArrayList<>();
+
+        String trend = summary.periodType() == ReportingPeriodType.WEEK ? "hebdomadaire" : "mensuelle";
+        insights.add("Performance " + trend + " : success rate a " + k.successRate() + "%, anomaly rate a " + k.anomalyRate() + "%.");
+
+        if (k.anomalyRate().compareTo(BigDecimal.valueOf(20)) >= 0) {
+            insights.add("Risque eleve : le taux d'anomalies depasse 20%. Prioriser le traitement DEBIT_A_TORT et ABSENTS.");
+        } else if (k.anomalyRate().compareTo(BigDecimal.valueOf(10)) >= 0) {
+            insights.add("Risque modere : renforcer le suivi journalier des anomalies pour reduire les ecarts.");
+        } else {
+            insights.add("Risque maitrise : niveau d'anomalie faible sur la periode.");
+        }
+
+        if (k.ecartGlobal().abs().compareTo(BigDecimal.ZERO) > 0) {
+            insights.add("Ecart financier detecte (" + k.ecartGlobal() + "). Reconciliation manuelle recommandee sur les plus gros montants.");
+        } else {
+            insights.add("Aucun ecart financier global materialise sur la periode.");
+        }
+
+        if (k.picVolumeJournalier() != null && k.picVolumeJournalier().businessDate() != null) {
+            insights.add("Pic d'activite observe le " + k.picVolumeJournalier().businessDate()
+                    + " avec " + k.picVolumeJournalier().totalTransactions() + " transactions.");
+        }
+
+        insights.add("Actions recommandees: 1) corriger les anomalies critiques, 2) suivre les doublons/statuts inconnus, 3) valider les transactions a fort ecart.");
+        return insights;
+    }
+
+    private record ReportWindow(LocalDate from, LocalDate to) {}
+
+    private record ReportData(List<ReportingRow> rows) {}
+
+    private record ReportingRow(ReconciliationResult result, LocalDate transactionDate) {}
+}

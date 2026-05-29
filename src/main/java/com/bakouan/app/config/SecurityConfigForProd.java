@@ -115,6 +115,7 @@ public class SecurityConfigForProd {
 
         http.authorizeHttpRequests(auth -> {
             auth
+                    .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/webjars/**").permitAll()
                     .requestMatchers(BaConstants.URL.BASE_URL + "/activate").permitAll()
                     .requestMatchers(BaConstants.URL.BASE_URL + BaConstants.URL.USER + "/{id}/activate").permitAll()
                     .requestMatchers(BaConstants.URL.BASE_URL + BaConstants.URL.USER).permitAll()

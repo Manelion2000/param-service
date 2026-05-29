@@ -11,6 +11,7 @@ import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.mail.MailProperties;
 import org.springframework.mail.MailException;
@@ -38,14 +39,14 @@ import java.util.Properties;
 @RequiredArgsConstructor
 public class BaMailService {
 
-    private final JavaMailSender javaMailSender;
+    private final ObjectProvider<JavaMailSender> javaMailSenderProvider;
     private final MailProperties mailProperties;
     private final SpringTemplateEngine templateEngine;
 
     @Value(value = "${spring.mail.username}")
     private String emailFrom;
 
-    private static final String SENDER_NAME = "Categorie-App";
+    private static final String SENDER_NAME = "BSIC-SERVICE";
 
     /**
      * Envois de mail.
@@ -65,6 +66,11 @@ public class BaMailService {
                           final boolean isMultipart,
                           final boolean isHtml, final String receiverName,
                           final File... attachements) {
+        JavaMailSender javaMailSender = javaMailSenderProvider.getIfAvailable();
+        if (javaMailSender == null) {
+            log.warn("JavaMailSender not configured. Skipping email send to '{}'", to);
+            return;
+        }
         log.debug(
                 "Send email[multipart '{}' and html '{}'] to '{}' with subject '{}' and content={}",
                 isMultipart,

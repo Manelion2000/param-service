@@ -143,7 +143,7 @@ public class BaRestExceptionHandler {
             final Exception ex, @Nullable final Object body, final HttpHeaders headers,
             final HttpStatus status, final WebRequest request) {
         if (HttpStatus.INTERNAL_SERVER_ERROR.equals(status)) {
-            request.setAttribute("javax.servlet.error.exception", ex, 0);
+            request.setAttribute("jakarta.servlet.error.exception", ex, 0);
         }
 
         return new ResponseEntity<>(body, headers, status);

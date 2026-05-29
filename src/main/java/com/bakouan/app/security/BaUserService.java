@@ -90,9 +90,9 @@ public class BaUserService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "L'email est déjà utilisé.");
         }
 
-//        if (uDto.getCredentials() == null || BaUtils.isEmpty(uDto.getCredentials().getPassword())) {
-//            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Vous devez fournir le mot de passe");
-//        }
+        if (uDto.getCredentials() == null || BaUtils.isEmpty(uDto.getCredentials().getPassword())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Vous devez fournir le mot de passe");
+     }
 
         BaUser user = this.mapper.maps(uDto);
         user.setId(BaUtils.randomUUID());

@@ -1,10 +1,10 @@
 server:
-  port: 8083
+  port: 8087
 spring:
   profiles:
     active: prod
   application:
-    name: CategorieService
+    name: reconcilliation-service
   # Configuration du service mail
   mail:
     host: mailer.gov.bf
@@ -22,6 +22,12 @@ spring:
 app:
   storage:
     path: ./datas
+  retention:
+    enabled: false
+    keep-days: 180
+    batch-size: 5000
+    cron: "0 30 2 * * *"
+    mode: ARCHIVE_AND_PURGE
   security:
     attempts:
       # En nombre de minutes

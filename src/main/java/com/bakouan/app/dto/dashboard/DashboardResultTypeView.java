@@ -1,0 +1,14 @@
+package com.bakouan.app.dto.dashboard;
+
+public enum DashboardResultTypeView {
+    MATCH_OK,
+    DEBIT_A_TORT,
+    CREDIT_SANS_DEBIT,
+    ECHEC_DES_DEUX_COTES,
+    ABSENT_COTE_OPERATEUR,
+    ABSENT_COTE_BANQUE,
+    MONTANT_DIFFERENT,
+    STATUT_INCONNU,
+    DOUBLONS
+}
+

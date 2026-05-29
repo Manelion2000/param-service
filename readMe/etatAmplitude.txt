@@ -1,0 +1,2 @@
+nom, numero telephone, num de compte client, agence du client
+recuperer dans la table des evenement des operation de la veille en se basant le champ lib1
