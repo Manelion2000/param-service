@@ -27,7 +27,13 @@ public class ReconciliationClassificationService {
 
     public ReconciliationResultType classify(BankTransaction bank, MoovTransaction moov) {
         if (bank == null && moov != null) {
-            return ReconciliationResultType.ABSENT_COTE_BANQUE;
+            if (moov.getTransactionStatusNormalized() == NormalizedMoovStatus.SUCCESS_MOOV) {
+                return ReconciliationResultType.ABSENT_COTE_BANQUE;
+            }
+            if (moov.getTransactionStatusNormalized() == NormalizedMoovStatus.FAILED_MOOV) {
+                return ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
+            }
+            return ReconciliationResultType.STATUT_INCONNU;
         }
         if (bank != null && moov == null) {
             return ReconciliationResultType.ABSENT_COTE_MOOV;
@@ -73,9 +79,12 @@ public class ReconciliationClassificationService {
     public ReconciliationResultType classify(BankTransaction bank, OrangeTransaction orange) {
         if (bank == null && orange != null) {
             if (orange.getTransactionStatusNormalized() == NormalizedOrangeStatus.SUCCESS_ORANGE) {
-                return ReconciliationResultType.CREDIT_SANS_DEBIT;
+                return ReconciliationResultType.ABSENT_COTE_BANQUE;
             }
-            return ReconciliationResultType.ABSENT_COTE_BANQUE;
+            if (orange.getTransactionStatusNormalized() == NormalizedOrangeStatus.FAILED_ORANGE) {
+                return ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
+            }
+            return ReconciliationResultType.STATUT_INCONNU;
         }
         if (bank != null && orange == null) {
             if (bank.getAllocationStatusNormalized() == NormalizedBankStatus.SUCCESS_BANK) {
@@ -126,5 +135,6 @@ public class ReconciliationClassificationService {
         }
         return amplitudeTransactionRepository.existsByOperationReference(ref.trim());
     }
+
 }
 

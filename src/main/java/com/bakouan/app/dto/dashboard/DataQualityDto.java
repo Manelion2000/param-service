@@ -9,7 +9,8 @@ public record DataQualityDto(
         BigDecimal parsingSuccessRate,
         long duplicateCount,
         BigDecimal duplicateRate,
-        BigDecimal invalidRowRate
+        BigDecimal invalidRowRate,
+        long operatorOutOfScopeCount,
+        BigDecimal operatorOutOfScopeRate
 ) {
 }
-

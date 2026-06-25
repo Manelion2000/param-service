@@ -1,0 +1,15 @@
+package com.bakouan.app.enums;
+
+public enum ReconciliationReasonCode {
+    MATCH_OK,
+    DEBIT_A_TORT,
+    CREDIT_SANS_DEBIT,
+    ECHEC_DES_DEUX_COTES,
+    ABSENT_COTE_BANQUE,
+    ABSENT_COTE_OPERATEUR,
+    OPERATEUR_NON_ABOUTI_SANS_BANQUE,
+    MONTANT_DIFFERENT,
+    DOUBLON_BANQUE,
+    DOUBLON_OPERATEUR,
+    STATUT_INCONNU
+}

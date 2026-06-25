@@ -92,7 +92,8 @@ public class CompensationController {
                 cb.equal(root.get("run").get("operator"), operator),
                 cb.greaterThanOrEqualTo(root.get("businessDate"), dateFrom),
                 cb.lessThanOrEqualTo(root.get("businessDate"), dateTo),
-                cb.notEqual(root.get("resultType"), ReconciliationResultType.MATCH_OK)
+                cb.notEqual(root.get("resultType"), ReconciliationResultType.MATCH_OK),
+                cb.notEqual(root.get("resultType"), ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE)
         ), pageable);
 
         Set<Long> bankIds = page.getContent().stream()

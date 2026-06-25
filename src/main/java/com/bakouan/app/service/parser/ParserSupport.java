@@ -7,7 +7,12 @@ import java.util.*;
 final class ParserSupport {
 
     private static final Map<SourceType, List<List<String>>> REQUIRED_HEADER_ALIASES = Map.of(
-            SourceType.BANQUE, List.of(List.of("ID transaction")),
+            SourceType.BANQUE, List.of(
+                    List.of("TRANSACTIONID_", "ID transaction", "Id transaction", "Transaction ID", "transaction_id"),
+                    List.of("ALLOCATIONSTATUS_", "DEALLOCATIONSTATUS_", "Statut Allocation", "Statut allocation", "Status"),
+                    List.of("AMOUNT_", "TXAMOUNT_", "Montant", "Montant nominal", "Amount"),
+                    List.of("CDATE_", "TXDATE_", "Date transaction", "Date Operation")
+            ),
             SourceType.MOOV, List.of(
                     List.of("Receipt No.", "Receipt No", "RECEIPT_NO", "receipt_no", "receiptno", "receipt"),
                     List.of("Transaction Status", "TRANSACTION_STATUS", "transaction_status", "STATUS", "status")

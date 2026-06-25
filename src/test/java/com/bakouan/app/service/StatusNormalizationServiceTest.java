@@ -14,7 +14,12 @@ class StatusNormalizationServiceTest {
     @Test
     void shouldNormalizeBankStatus() {
         assertEquals(NormalizedBankStatus.SUCCESS_BANK, service.normalizeBankStatus("Alloue"));
+        assertEquals(NormalizedBankStatus.SUCCESS_BANK, service.normalizeBankStatus("Allocated"));
+        assertEquals(NormalizedBankStatus.SUCCESS_BANK, service.normalizeBankStatus("Deallocated"));
+        assertEquals(NormalizedBankStatus.SUCCESS_BANK, service.normalizeBankStatus("PaymentIssued"));
         assertEquals(NormalizedBankStatus.FAILED_BANK, service.normalizeBankStatus("Non Alloue"));
+        assertEquals(NormalizedBankStatus.FAILED_BANK, service.normalizeBankStatus("PaymentRejected"));
+        assertEquals(NormalizedBankStatus.FAILED_BANK, service.normalizeBankStatus("AllocationFailed"));
     }
 
     @Test

@@ -185,26 +185,29 @@ public class ReconciliationServiceImpl implements ReconciliationService {
     }
 
     private ReconciliationSummaryDto buildSummary(List<ReconciliationResult> rows) {
-        long totalResults = rows.size();
-        long match = count(rows, ReconciliationResultType.MATCH_OK);
-        long echecDeuxCotes = count(rows, ReconciliationResultType.ECHEC_DES_DEUX_COTES);
-        long debit = count(rows, ReconciliationResultType.DEBIT_A_TORT);
-        long credit = count(rows, ReconciliationResultType.CREDIT_SANS_DEBIT);
-        long absentBank = count(rows, ReconciliationResultType.ABSENT_COTE_BANQUE);
-        long absentMoov = count(rows, ReconciliationResultType.ABSENT_COTE_MOOV)
-                + count(rows, ReconciliationResultType.ABSENT_COTE_ORANGE);
-        long montantDiff = count(rows, ReconciliationResultType.MONTANT_DIFFERENT);
-        long doublons = count(rows, ReconciliationResultType.DOUBLON_BANQUE) + count(rows, ReconciliationResultType.DOUBLON_MOOV);
+        List<ReconciliationResult> financialRows = rows.stream()
+                .filter(this::isFinanciallyRelevant)
+                .toList();
+        long totalResults = financialRows.size();
+        long match = count(financialRows, ReconciliationResultType.MATCH_OK);
+        long echecDeuxCotes = count(financialRows, ReconciliationResultType.ECHEC_DES_DEUX_COTES);
+        long debit = count(financialRows, ReconciliationResultType.DEBIT_A_TORT);
+        long credit = count(financialRows, ReconciliationResultType.CREDIT_SANS_DEBIT);
+        long absentBank = count(financialRows, ReconciliationResultType.ABSENT_COTE_BANQUE);
+        long absentMoov = count(financialRows, ReconciliationResultType.ABSENT_COTE_MOOV)
+                + count(financialRows, ReconciliationResultType.ABSENT_COTE_ORANGE);
+        long montantDiff = count(financialRows, ReconciliationResultType.MONTANT_DIFFERENT);
+        long doublons = count(financialRows, ReconciliationResultType.DOUBLON_BANQUE) + count(financialRows, ReconciliationResultType.DOUBLON_MOOV);
         long totalEchecs = totalResults - match;
 
-        BigDecimal totalBank = rows.stream().map(ReconciliationResult::getBankAmount).filter(Objects::nonNull)
+        BigDecimal totalBank = financialRows.stream().map(ReconciliationResult::getBankAmount).filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal totalMoov = rows.stream().map(ReconciliationResult::getMoovAmount).filter(Objects::nonNull)
+        BigDecimal totalMoov = financialRows.stream().map(ReconciliationResult::getMoovAmount).filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         return new ReconciliationSummaryDto(
-                rows.stream().filter(r -> r.getBankTransactionId() != null).count(),
-                rows.stream().filter(r -> r.getMoovTransactionId() != null).count(),
+                financialRows.stream().filter(r -> r.getBankTransactionId() != null).count(),
+                financialRows.stream().filter(r -> r.getMoovTransactionId() != null).count(),
                 match, echecDeuxCotes, debit, credit, absentBank, absentMoov, montantDiff, doublons,
                 toRate(match, totalResults),
                 toRate(totalEchecs, totalResults),
@@ -217,6 +220,10 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                 toRate(doublons, totalResults),
                 totalBank, totalMoov, totalBank.subtract(totalMoov)
         );
+    }
+
+    private boolean isFinanciallyRelevant(ReconciliationResult row) {
+        return row.getResultType() != ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
     }
 
     private Specification<ReconciliationResult> globalSpec(LocalDate dateFrom, LocalDate dateTo, ReconciliationResultType type, OperatorType operator) {

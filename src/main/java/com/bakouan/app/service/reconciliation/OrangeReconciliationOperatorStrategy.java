@@ -1,5 +1,7 @@
 package com.bakouan.app.service.reconciliation;
 
+import com.bakouan.app.enums.OperatorType;
+import com.bakouan.app.enums.ReconciliationReasonCode;
 import com.bakouan.app.enums.ReconciliationResultType;
 import com.bakouan.app.enums.SourceType;
 import com.bakouan.app.model.BankTransaction;
@@ -58,13 +60,13 @@ public class OrangeReconciliationOperatorStrategy implements ReconciliationOpera
 
             if (banks.size() > 1) {
                 for (BankTransaction bank : banks) {
-                    resultWriter.save(run, key, bank, oranges.isEmpty() ? null : oranges.get(0), ReconciliationResultType.DOUBLON_BANQUE, "ORANGE:Plusieurs lignes banque");
+                    resultWriter.save(run, key, bank, oranges.isEmpty() ? null : oranges.get(0), ReconciliationResultType.DOUBLON_BANQUE, resultWriter.reason(OperatorType.ORANGE, ReconciliationReasonCode.DOUBLON_BANQUE));
                 }
                 continue;
             }
             if (oranges.size() > 1) {
                 for (OrangeTransaction orange : oranges) {
-                    resultWriter.save(run, key, banks.isEmpty() ? null : banks.get(0), orange, ReconciliationResultType.DOUBLON_MOOV, "ORANGE:Plusieurs lignes orange");
+                    resultWriter.save(run, key, banks.isEmpty() ? null : banks.get(0), orange, ReconciliationResultType.DOUBLON_MOOV, resultWriter.reason(OperatorType.ORANGE, ReconciliationReasonCode.DOUBLON_OPERATEUR));
                 }
                 continue;
             }
@@ -72,7 +74,23 @@ public class OrangeReconciliationOperatorStrategy implements ReconciliationOpera
             BankTransaction bank = banks.isEmpty() ? null : banks.get(0);
             OrangeTransaction orange = oranges.isEmpty() ? null : oranges.get(0);
             ReconciliationResultType type = classificationService.classify(bank, orange);
-            resultWriter.save(run, key, bank, orange, type, "ORANGE:" + type.name());
+            resultWriter.save(run, key, bank, orange, type, resultWriter.reason(OperatorType.ORANGE, reasonCode(type)));
         }
+    }
+
+    private ReconciliationReasonCode reasonCode(ReconciliationResultType type) {
+        return switch (type) {
+            case MATCH_OK -> ReconciliationReasonCode.MATCH_OK;
+            case DEBIT_A_TORT -> ReconciliationReasonCode.DEBIT_A_TORT;
+            case CREDIT_SANS_DEBIT -> ReconciliationReasonCode.CREDIT_SANS_DEBIT;
+            case ECHEC_DES_DEUX_COTES -> ReconciliationReasonCode.ECHEC_DES_DEUX_COTES;
+            case ABSENT_COTE_BANQUE -> ReconciliationReasonCode.ABSENT_COTE_BANQUE;
+            case ABSENT_COTE_MOOV, ABSENT_COTE_ORANGE -> ReconciliationReasonCode.ABSENT_COTE_OPERATEUR;
+            case OPERATEUR_NON_ABOUTI_SANS_BANQUE -> ReconciliationReasonCode.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
+            case MONTANT_DIFFERENT -> ReconciliationReasonCode.MONTANT_DIFFERENT;
+            case DOUBLON_BANQUE -> ReconciliationReasonCode.DOUBLON_BANQUE;
+            case DOUBLON_MOOV -> ReconciliationReasonCode.DOUBLON_OPERATEUR;
+            case STATUT_INCONNU -> ReconciliationReasonCode.STATUT_INCONNU;
+        };
     }
 }

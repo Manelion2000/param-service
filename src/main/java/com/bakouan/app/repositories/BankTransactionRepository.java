@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Set;
 import java.math.BigDecimal;
 import com.bakouan.app.enums.OperatorType;
+import com.bakouan.app.enums.NormalizedBankStatus;
 
 public interface BankTransactionRepository extends JpaRepository<BankTransaction, Long> {
     List<BankTransaction> findByFileImportIdIn(Collection<Long> importIds);
@@ -26,6 +27,27 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
 
     @Query("select distinct b.fileImport.id from BankTransaction b where b.transactionDate >= :from and b.transactionDate < :to")
     Set<Long> findImportIdsByTransactionDateRange(@Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
+    List<BankTransaction> findByTransactionDateGreaterThanEqualAndTransactionDateLessThan(LocalDateTime from, LocalDateTime to);
+    List<BankTransaction> findByAllocationStatusNormalizedAndTransactionDateGreaterThanEqualAndTransactionDateLessThan(
+            NormalizedBankStatus allocationStatusNormalized,
+            LocalDateTime from,
+            LocalDateTime to
+    );
+
+    @Query("""
+            select b
+            from BankTransaction b
+            where b.allocationStatusNormalized = :allocationStatusNormalized
+              and b.fileImport.operatorScope = :operator
+              and b.transactionDate >= :from
+              and b.transactionDate < :to
+            """)
+    List<BankTransaction> findByAllocationStatusAndTransactionDateRangeAndOperator(
+            @Param("allocationStatusNormalized") NormalizedBankStatus allocationStatusNormalized,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            @Param("operator") OperatorType operator
+    );
 
     @Query("""
             select coalesce(sum(b.amount), 0)
@@ -50,5 +72,13 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
     long countSuccessByTransactionDateRangeAndOperator(@Param("from") LocalDateTime from,
                                                        @Param("to") LocalDateTime to,
                                                        @Param("operator") OperatorType operator);
+
+    @Query("""
+            select max(b.transactionDate)
+            from BankTransaction b
+            where b.allocationStatusNormalized = com.bakouan.app.enums.NormalizedBankStatus.SUCCESS_BANK
+              and (:operator is null or b.fileImport.operatorScope = :operator)
+            """)
+    LocalDateTime findLatestSuccessTransactionDateByOperator(@Param("operator") OperatorType operator);
 }
 

@@ -45,6 +45,7 @@ public interface ReconciliationResultRepository extends JpaRepository<Reconcilia
             select r from ReconciliationResult r
             where r.run.id in :runIds
               and r.resultType <> com.bakouan.app.enums.ReconciliationResultType.MATCH_OK
+              and r.resultType <> com.bakouan.app.enums.ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE
               and r.businessDate between :dateFrom and :dateTo
             order by case
                 when r.resultType = com.bakouan.app.enums.ReconciliationResultType.DEBIT_A_TORT then 1

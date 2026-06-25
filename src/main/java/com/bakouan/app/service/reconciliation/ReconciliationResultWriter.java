@@ -1,5 +1,7 @@
 package com.bakouan.app.service.reconciliation;
 
+import com.bakouan.app.enums.OperatorType;
+import com.bakouan.app.enums.ReconciliationReasonCode;
 import com.bakouan.app.enums.ReconciliationResultType;
 import com.bakouan.app.model.BankTransaction;
 import com.bakouan.app.model.FileImport;
@@ -21,6 +23,10 @@ import java.time.OffsetDateTime;
 public class ReconciliationResultWriter {
 
     private final ReconciliationResultRepository resultRepository;
+
+    public String reason(OperatorType operator, ReconciliationReasonCode code) {
+        return operator.name() + ":" + code.name();
+    }
 
     public void save(ReconciliationRun run, String key, BankTransaction bank, MoovTransaction moov,
                      ReconciliationResultType type, String reason) {

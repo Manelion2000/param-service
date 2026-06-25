@@ -33,7 +33,10 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.LocalDate;
@@ -143,7 +146,7 @@ public class FileImportServiceImpl implements FileImportService {
             Map<String, String> row = rows.get(i);
             try {
                 if (sourceType == SourceType.BANQUE) {
-                    String transactionId = normalizeKey(ParseUtils.firstNonBlank(row.get("ID transaction"), row.get("Id transaction")));
+                    String transactionId = normalizeKey(extractBankTransactionId(row));
                     if (transactionId == null) {
                         invalid++;
                         continue;
@@ -152,23 +155,21 @@ public class FileImportServiceImpl implements FileImportService {
                         invalid++;
                         continue;
                     }
-                    String bankStatus = ParseUtils.firstNonBlank(
-                            row.get("Statut Allocation"),
-                            row.get("Statut allocation"),
-                            row.get("Status"),
-                            row.get("ALLOCATIONSTATUS_")
-                    );
+                    String operationNature = resolveBankOperationNature(row);
+                    String bankStatus = extractBankStatus(row);
                     bankStatus = normalizeAllocationStatusLabel(bankStatus);
                     BankTransaction bank = BankTransaction.builder()
                             .fileImport(fileImport)
-                            .transactionId(ParseUtils.firstNonBlank(transactionId, normalizeKey(row.get("TRANSACTIONID_"))))
+                            .transactionId(ParseUtils.firstNonBlank(transactionId, normalizeKey(extractByAliases(row, "TRANSACTIONID_"))))
                             .allocationStatusRaw(bankStatus)
+                            .rejectReasonRaw(extractBankRejectReason(row))
                             .allocationStatusNormalized(statusNormalizationService.normalizeBankStatus(bankStatus))
                             .fullName(extractBankFullName(row))
                             .accountNumber(extractBankAccountNumber(row))
                             .phoneNumber(extractBankPhoneNumber(row))
                             .operationReference(extractBankOperationReference(row))
-                            .amount(ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(row.get("Montant"), row.get("Montant nominal"), row.get("AMOUNT_"))))
+                            .operationNature(operationNature)
+                            .amount(extractBankAmount(row))
                             .transactionDate(parseBankTransactionDate(row))
                             .rawPayloadJson(row.toString())
                             .lineNumber(parseLineNumber(row, i + 2))
@@ -193,20 +194,15 @@ public class FileImportServiceImpl implements FileImportService {
                         continue;
                     }
                     String moovStatusRaw = extractMoovStatus(row);
+                    String moovDetails = extractMoovDetails(row);
                     MoovTransaction moov = MoovTransaction.builder()
                             .fileImport(fileImport)
                             .receiptNo(receiptNo)
                             .transactionStatusRaw(moovStatusRaw)
                             .transactionStatusNormalized(statusNormalizationService.normalizeMoovStatus(moovStatusRaw))
-                            .transactionType(normalizeTransactionType(ParseUtils.firstNonBlank(
-                                    row.get("Transaction Type"),
-                                    row.get("Transfer Type"),
-                                    row.get("Type"),
-                                    row.get("transaction_type"),
-                                    row.get("transfer_type")
-                            )))
+                            .transactionType(resolveMoovTransactionType(moovDetails, row))
                             .msisdn(ParseUtils.firstNonBlank(row.get("Initiator MSISDN"), row.get("initiator_msisdn"), row.get("msisdn"), row.get("MSISDN")))
-                            .amount(ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(row.get("Withdrawn"), row.get("Amount"), row.get("amount"), row.get("MONTANT"))))
+                            .amount(extractMoovAmount(row, moovDetails))
                             .initiationTime(ParseUtils.parseDateTime(ParseUtils.firstNonBlank(row.get("Initiation Time"), row.get("initiation_time"), row.get("created_at"), row.get("creation_date"))))
                             .completionTime(ParseUtils.parseDateTime(ParseUtils.firstNonBlank(row.get("Completion Time"), row.get("completion_time"), row.get("updated_at"), row.get("transaction_date"))))
                             .rawPayloadJson(row.toString())
@@ -262,7 +258,8 @@ public class FileImportServiceImpl implements FileImportService {
                     String libelle = ParseUtils.firstNonBlank(row.get("_c6"), row.get("libelle"), row.get("Libelle"), row.get("LIBELLE"));
                     String operationRef = normalizeAmplitudeReference(ParseUtils.firstNonBlank(row.get("_c7")));
                     String phoneNumber = normalizeAmplitudePhone(ParseUtils.firstNonBlank(row.get("_c8")));
-                    java.math.BigDecimal amount = ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(row.get("_c10"), row.get("Credit")));
+                    java.math.BigDecimal amount = extractAmplitudeAmount(row);
+                    String amplitudeDirection = resolveAmplitudeDirection(row);
                     boolean transactionLikeRow = amount != null
                             || (pieceNumber != null && !pieceNumber.isBlank())
                             || (eventNumber != null && !eventNumber.isBlank())
@@ -286,7 +283,7 @@ public class FileImportServiceImpl implements FileImportService {
                             .operationReference(operationRef != null ? operationRef : extractAmplitudeOperationReference(row))
                             .phoneNumber(phoneNumber)
                             .accountNumber(ParseUtils.digitsOnlyIdentifier(ParseUtils.firstNonBlank(row.get("Compte"), row.get("Numero de compte"), row.get("Numéro de compte"))))
-                            .direction(ParseUtils.firstNonBlank(row.get("Sens"), row.get("Type"), row.get("Direction")))
+                            .direction(amplitudeDirection)
                             .amount(amount)
                             .operationDate(ParseUtils.parseDateTime(ParseUtils.firstNonBlank(row.get("Date operation"), row.get("Date"), row.get("Date transaction"))))
                             .rawPayloadJson(row.toString())
@@ -330,54 +327,35 @@ public class FileImportServiceImpl implements FileImportService {
 
     @Override
     @Transactional
-    public ImportDeletionResult deleteLatestImport(SourceType sourceType) {
+    public ImportDeletionResult deleteLatestImport(SourceType sourceType, boolean confirmCascade) {
         FileImport latestImport = fileImportRepository.findTopBySourceTypeOrderByImportedAtDescIdDesc(sourceType)
                 .orElseThrow(() -> new ReconciliationException("Aucun import trouve pour la source " + sourceType));
-
-        Long importId = latestImport.getId();
-        int deletedTransactions = switch (sourceType) {
-            case BANQUE -> bankTransactionRepository.countByFileImportId(importId);
-            case MOOV -> moovTransactionRepository.countByFileImportId(importId);
-            case ORANGE -> orangeTransactionRepository.countByFileImportId(importId);
-            case AMPLITUDE -> amplitudeTransactionRepository.countByFileImportId(importId);
-        };
-
-        List<ReconciliationRun> impactedRuns = reconciliationRunRepository.findAll().stream()
-                .filter(run -> runContainsImportId(run, sourceType, importId))
-                .toList();
-        int deletedResults = 0;
-        for (ReconciliationRun run : impactedRuns) {
-            deletedResults += reconciliationResultRepository.countByRunId(run.getId());
-            reconciliationResultRepository.deleteByRunId(run.getId());
-        }
-        if (!impactedRuns.isEmpty()) {
-            reconciliationRunRepository.deleteAll(impactedRuns);
-        }
-
-        switch (sourceType) {
-            case BANQUE -> bankTransactionRepository.deleteByFileImportId(importId);
-            case MOOV -> moovTransactionRepository.deleteByFileImportId(importId);
-            case ORANGE -> orangeTransactionRepository.deleteByFileImportId(importId);
-            case AMPLITUDE -> amplitudeTransactionRepository.deleteByFileImportId(importId);
-        }
-        fileImportRepository.delete(latestImport);
-        fileStorageService.deleteIfExists(latestImport.getFilePath());
+        DeletionPlan plan = buildDeletionPlan(sourceType, List.of(latestImport));
+        requireCascadeConfirmation(plan, confirmCascade);
+        DeletionStats stats = executeDeletionPlan(sourceType, plan);
 
         return new ImportDeletionResult(
                 sourceType,
-                importId,
+                latestImport.getId(),
                 latestImport.getOriginalFilename(),
-                deletedTransactions,
-                deletedResults,
-                impactedRuns.size()
+                stats.deletedTransactions(),
+                stats.deletedResults(),
+                stats.deletedRuns()
         );
     }
 
     @Override
     @Transactional
-    public ImportBulkDeletionResult deleteImportsBySourceAndBusinessDate(SourceType sourceType, OperatorType operatorScope, LocalDate businessDate) {
+    public ImportBulkDeletionResult deleteImportsBySourceAndBusinessDate(
+            SourceType sourceType,
+            OperatorType operatorScope,
+            LocalDate businessDate,
+            boolean confirmCascade
+    ) {
         List<FileImport> imports = resolveImportsBySourceAndBusinessDate(sourceType, operatorScope, businessDate);
-        DeletionStats stats = deleteImports(sourceType, imports);
+        DeletionPlan plan = buildDeletionPlan(sourceType, imports);
+        requireCascadeConfirmation(plan, confirmCascade);
+        DeletionStats stats = executeDeletionPlan(sourceType, plan);
         return new ImportBulkDeletionResult(
                 sourceType,
                 businessDate,
@@ -390,14 +368,20 @@ public class FileImportServiceImpl implements FileImportService {
 
     @Override
     @Transactional
-    public ImportFullDeletionResult deleteAllImportsBySource(SourceType sourceType, OperatorType operatorScope) {
+    public ImportFullDeletionResult deleteAllImportsBySource(
+            SourceType sourceType,
+            OperatorType operatorScope,
+            boolean confirmCascade
+    ) {
         if (sourceType == SourceType.BANQUE && operatorScope == null) {
             throw new IllegalArgumentException("operator est obligatoire pour supprimer tous les imports BANQUE (MOOV ou ORANGE)");
         }
         List<FileImport> imports = sourceType == SourceType.BANQUE
                 ? new ArrayList<>(fileImportRepository.findBySourceTypeAndOperatorScope(sourceType, operatorScope))
                 : new ArrayList<>(fileImportRepository.findBySourceType(sourceType));
-        DeletionStats stats = deleteImports(sourceType, imports);
+        DeletionPlan plan = buildDeletionPlan(sourceType, imports);
+        requireCascadeConfirmation(plan, confirmCascade);
+        DeletionStats stats = executeDeletionPlan(sourceType, plan);
         return new ImportFullDeletionResult(
                 sourceType,
                 sourceType == SourceType.BANQUE ? operatorScope : null,
@@ -412,30 +396,19 @@ public class FileImportServiceImpl implements FileImportService {
     @Transactional(readOnly = true)
     public ImportDeletionPreviewResult previewDeletionBySourceAndBusinessDate(SourceType sourceType, OperatorType operatorScope, LocalDate businessDate) {
         List<FileImport> imports = resolveImportsBySourceAndBusinessDate(sourceType, operatorScope, businessDate);
-        if (imports.isEmpty()) {
-            return new ImportDeletionPreviewResult(sourceType, businessDate, 0, 0, 0, 0);
-        }
-        Set<Long> importIds = imports.stream().map(FileImport::getId).collect(java.util.stream.Collectors.toSet());
-        int candidateTransactions = switch (sourceType) {
-            case BANQUE -> imports.stream().mapToInt(i -> bankTransactionRepository.countByFileImportId(i.getId())).sum();
-            case MOOV -> imports.stream().mapToInt(i -> moovTransactionRepository.countByFileImportId(i.getId())).sum();
-            case ORANGE -> imports.stream().mapToInt(i -> orangeTransactionRepository.countByFileImportId(i.getId())).sum();
-            case AMPLITUDE -> imports.stream().mapToInt(i -> amplitudeTransactionRepository.countByFileImportId(i.getId())).sum();
-        };
-        List<ReconciliationRun> impactedRuns = new ArrayList<>();
-        for (ReconciliationRun run : reconciliationRunRepository.findAll()) {
-            if (containsAnyImportId(run, sourceType, importIds)) {
-                impactedRuns.add(run);
-            }
-        }
-        int impactedResults = impactedRuns.stream().mapToInt(run -> reconciliationResultRepository.countByRunId(run.getId())).sum();
+        DeletionPlan plan = buildDeletionPlan(sourceType, imports);
         return new ImportDeletionPreviewResult(
                 sourceType,
                 businessDate,
-                imports.size(),
-                candidateTransactions,
-                impactedResults,
-                impactedRuns.size()
+                plan.imports().size(),
+                plan.transactionCount(),
+                plan.resultCount(),
+                plan.impactedRuns().size(),
+                Set.copyOf(plan.importIds()),
+                plan.impactedRuns().stream()
+                        .map(ReconciliationRun::getId)
+                        .collect(java.util.stream.Collectors.toUnmodifiableSet()),
+                !plan.impactedRuns().isEmpty()
         );
     }
 
@@ -456,6 +429,118 @@ public class FileImportServiceImpl implements FileImportService {
             return null;
         }
         return raw.trim().replace('-', '_').replace(' ', '_').toUpperCase();
+    }
+
+    private String resolveMoovTransactionType(String details, Map<String, String> row) {
+        String normalizedDetails = normalizeHeaderKey(details);
+        if (normalizedDetails != null) {
+            if (normalizedDetails.contains("banktomoovmoney")) {
+                return "BANK_TO_WALLET";
+            }
+            if (normalizedDetails.contains("moovmoneytobank")) {
+                return "WALLET_TO_BANK";
+            }
+        }
+        return normalizeTransactionType(ParseUtils.firstNonBlank(
+                details,
+                row.get("Transaction Type"),
+                row.get("Transfer Type"),
+                row.get("Type"),
+                row.get("transaction_type"),
+                row.get("transfer_type")
+        ));
+    }
+
+    private BigDecimal extractMoovAmount(Map<String, String> row, String details) {
+        String normalizedDetails = normalizeHeaderKey(details);
+        if (normalizedDetails != null && normalizedDetails.contains("moovmoneytobank")) {
+            BigDecimal paidIn = ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(row.get("Paid In"), row.get("paid_in"), row.get("PaidIn")));
+            if (paidIn != null) {
+                return paidIn;
+            }
+        }
+        if (normalizedDetails != null && normalizedDetails.contains("banktomoovmoney")) {
+            BigDecimal withdrawn = ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(row.get("Withdrawn"), row.get("withdrawn")));
+            if (withdrawn != null) {
+                return withdrawn;
+            }
+        }
+        BigDecimal withdrawn = ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(row.get("Withdrawn"), row.get("withdrawn")));
+        if (withdrawn != null && withdrawn.compareTo(BigDecimal.ZERO) != 0) {
+            return withdrawn;
+        }
+        BigDecimal paidIn = ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(row.get("Paid In"), row.get("paid_in"), row.get("PaidIn")));
+        if (paidIn != null && paidIn.compareTo(BigDecimal.ZERO) != 0) {
+            return paidIn;
+        }
+        return ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(row.get("Amount"), row.get("amount"), row.get("MONTANT")));
+    }
+
+    private BigDecimal extractAmplitudeAmount(Map<String, String> row) {
+        BigDecimal credit = extractAmplitudeCreditAmount(row);
+        if (credit != null && credit.compareTo(BigDecimal.ZERO) != 0) {
+            return credit;
+        }
+        BigDecimal debit = extractAmplitudeDebitAmount(row);
+        if (debit != null && debit.compareTo(BigDecimal.ZERO) != 0) {
+            return debit;
+        }
+        return ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(row.get("Amount"), row.get("amount"), row.get("Montant"), row.get("MONTANT")));
+    }
+
+    private String resolveAmplitudeDirection(Map<String, String> row) {
+        String explicitDirection = ParseUtils.firstNonBlank(row.get("Sens"), row.get("Type"), row.get("Direction"));
+        String normalizedExplicit = normalizeHeaderKey(explicitDirection);
+        if (normalizedExplicit != null) {
+            if (normalizedExplicit.contains("banktomoov") || normalizedExplicit.contains("credit")) {
+                return "BANK_TO_WALLET";
+            }
+            if (normalizedExplicit.contains("moovtobank") || normalizedExplicit.contains("debit")) {
+                return "WALLET_TO_BANK";
+            }
+        }
+
+        String normalizedLibelle = normalizeHeaderKey(ParseUtils.firstNonBlank(row.get("_c6"), row.get("libelle"), row.get("Libelle"), row.get("LIBELLE")));
+        BigDecimal credit = extractAmplitudeCreditAmount(row);
+        BigDecimal debit = extractAmplitudeDebitAmount(row);
+        boolean hasCredit = credit != null && credit.compareTo(BigDecimal.ZERO) != 0;
+        boolean hasDebit = debit != null && debit.compareTo(BigDecimal.ZERO) != 0;
+
+        if (normalizedLibelle != null) {
+            if (normalizedLibelle.contains("virtdigit") && hasCredit) {
+                return "BANK_TO_WALLET";
+            }
+            if ((normalizedLibelle.contains("virementw") || normalizedLibelle.contains("virementm")) && hasDebit) {
+                return "WALLET_TO_BANK";
+            }
+        }
+        if (hasCredit) {
+            return "BANK_TO_WALLET";
+        }
+        if (hasDebit) {
+            return "WALLET_TO_BANK";
+        }
+        return explicitDirection;
+    }
+
+    private BigDecimal extractAmplitudeCreditAmount(Map<String, String> row) {
+        return ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(
+                row.get("_c10"),
+                row.get("Credit"),
+                row.get("Crédit"),
+                row.get("CREDIT"),
+                row.get("credit")
+        ));
+    }
+
+    private BigDecimal extractAmplitudeDebitAmount(Map<String, String> row) {
+        return ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(
+                row.get("_c9"),
+                row.get("Debit"),
+                row.get("Débit"),
+                row.get("DEBIT"),
+                row.get("debit")
+        ));
     }
 
     private String normalizeKey(String raw) {
@@ -520,6 +605,30 @@ public class FileImportServiceImpl implements FileImportService {
             if (key == null) continue;
             String k = key.trim().toLowerCase();
             if (k.contains("status")) {
+                String v = e.getValue();
+                if (v != null && !v.isBlank()) return v;
+            }
+        }
+        return null;
+    }
+
+    private String extractMoovDetails(Map<String, String> row) {
+        String details = ParseUtils.firstNonBlank(
+                row.get("Details"),
+                row.get("Detail"),
+                row.get("DETAILS"),
+                row.get("DETAIL"),
+                row.get("details"),
+                row.get("detail")
+        );
+        if (details != null && !details.isBlank()) {
+            return details;
+        }
+        for (Map.Entry<String, String> e : row.entrySet()) {
+            String key = e.getKey();
+            if (key == null) continue;
+            String k = key.trim().toLowerCase();
+            if (k.contains("detail")) {
                 String v = e.getValue();
                 if (v != null && !v.isBlank()) return v;
             }
@@ -633,6 +742,8 @@ public class FileImportServiceImpl implements FileImportService {
 
     private String extractBankPhoneNumber(Map<String, String> row) {
         String direct = ParseUtils.firstNonBlank(
+                row.get("MSISDN_"),
+                row.get("TXMSISDN_"),
                 row.get("MSISDN"),
                 row.get("MSIDN_"),
                 row.get("Telephone"),
@@ -707,6 +818,13 @@ public class FileImportServiceImpl implements FileImportService {
         }
         return digits;
     }
+
+    private String extractBankRejectReason(Map<String, String> row) {
+        return ParseUtils.firstNonBlank(
+                extractByAliases(row, "REJECTREASON_", "Reject Reason", "Reject reason", "Motif rejet", "Motif de rejet"),
+                extractByHeaderContainsAny(row, "rejectreason", "reject_reason", "motifrejet", "motif_rejet")
+        );
+    }
     private String extractPayloadField(String payload, Pattern pattern) {
         if (payload == null || payload.isBlank()) {
             return null;
@@ -721,7 +839,7 @@ public class FileImportServiceImpl implements FileImportService {
     private Set<String> extractBankTransactionIds(List<Map<String, String>> rows) {
         Set<String> ids = new HashSet<>();
         for (Map<String, String> row : rows) {
-            String id = normalizeKey(ParseUtils.firstNonBlank(row.get("ID transaction"), row.get("Id transaction")));
+            String id = normalizeKey(extractBankTransactionId(row));
             if (id != null) {
                 ids.add(id);
             }
@@ -749,16 +867,6 @@ public class FileImportServiceImpl implements FileImportService {
             }
         }
         return omTransactionIds;
-    }
-
-    private boolean runContainsImportId(ReconciliationRun run, SourceType sourceType, Long importId) {
-        String csvIds = switch (sourceType) {
-            case BANQUE -> run.getBankImportIds();
-            case MOOV -> run.getMoovImportIds();
-            case ORANGE -> run.getOrangeImportIds();
-            case AMPLITUDE -> null;
-        };
-        return parseCsvIds(csvIds).contains(importId);
     }
 
     private boolean containsAnyImportId(ReconciliationRun run, SourceType sourceType, Set<Long> importIds) {
@@ -846,12 +954,12 @@ public class FileImportServiceImpl implements FileImportService {
         };
     }
 
-    private DeletionStats deleteImports(SourceType sourceType, List<FileImport> imports) {
+    private DeletionPlan buildDeletionPlan(SourceType sourceType, List<FileImport> imports) {
         if (imports.isEmpty()) {
-            return new DeletionStats(0, 0, 0, 0);
+            return new DeletionPlan(List.of(), Set.of(), 0, List.of(), 0);
         }
         Set<Long> importIds = imports.stream().map(FileImport::getId).collect(java.util.stream.Collectors.toSet());
-        int deletedTransactions = switch (sourceType) {
+        int transactionCount = switch (sourceType) {
             case BANQUE -> imports.stream().mapToInt(i -> bankTransactionRepository.countByFileImportId(i.getId())).sum();
             case MOOV -> imports.stream().mapToInt(i -> moovTransactionRepository.countByFileImportId(i.getId())).sum();
             case ORANGE -> imports.stream().mapToInt(i -> orangeTransactionRepository.countByFileImportId(i.getId())).sum();
@@ -864,26 +972,67 @@ public class FileImportServiceImpl implements FileImportService {
                 impactedRuns.add(run);
             }
         }
-        int deletedResults = 0;
-        for (ReconciliationRun run : impactedRuns) {
-            deletedResults += reconciliationResultRepository.countByRunId(run.getId());
+        int resultCount = impactedRuns.stream()
+                .mapToInt(run -> reconciliationResultRepository.countByRunId(run.getId()))
+                .sum();
+        return new DeletionPlan(
+                List.copyOf(imports),
+                Set.copyOf(importIds),
+                transactionCount,
+                List.copyOf(impactedRuns),
+                resultCount
+        );
+    }
+
+    private void requireCascadeConfirmation(DeletionPlan plan, boolean confirmCascade) {
+        if (!plan.impactedRuns().isEmpty() && !confirmCascade) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Suppression refusee: ces imports sont utilises par "
+                            + plan.impactedRuns().size()
+                            + " run(s) et "
+                            + plan.resultCount()
+                            + " resultat(s). Consultez preview-delete puis relancez avec confirmCascade=true."
+            );
+        }
+    }
+
+    private DeletionStats executeDeletionPlan(SourceType sourceType, DeletionPlan plan) {
+        if (plan.imports().isEmpty()) {
+            return new DeletionStats(0, 0, 0, 0);
+        }
+        for (ReconciliationRun run : plan.impactedRuns()) {
             reconciliationResultRepository.deleteByRunId(run.getId());
         }
-        if (!impactedRuns.isEmpty()) {
-            reconciliationRunRepository.deleteAll(impactedRuns);
+        if (!plan.impactedRuns().isEmpty()) {
+            reconciliationRunRepository.deleteAll(plan.impactedRuns());
         }
 
         switch (sourceType) {
-            case BANQUE -> importIds.forEach(bankTransactionRepository::deleteByFileImportId);
-            case MOOV -> importIds.forEach(moovTransactionRepository::deleteByFileImportId);
-            case ORANGE -> importIds.forEach(orangeTransactionRepository::deleteByFileImportId);
-            case AMPLITUDE -> importIds.forEach(amplitudeTransactionRepository::deleteByFileImportId);
+            case BANQUE -> plan.importIds().forEach(bankTransactionRepository::deleteByFileImportId);
+            case MOOV -> plan.importIds().forEach(moovTransactionRepository::deleteByFileImportId);
+            case ORANGE -> plan.importIds().forEach(orangeTransactionRepository::deleteByFileImportId);
+            case AMPLITUDE -> plan.importIds().forEach(amplitudeTransactionRepository::deleteByFileImportId);
         }
-        for (FileImport fileImport : imports) {
+        for (FileImport fileImport : plan.imports()) {
             fileImportRepository.delete(fileImport);
             fileStorageService.deleteIfExists(fileImport.getFilePath());
         }
-        return new DeletionStats(imports.size(), deletedTransactions, deletedResults, impactedRuns.size());
+        return new DeletionStats(
+                plan.imports().size(),
+                plan.transactionCount(),
+                plan.resultCount(),
+                plan.impactedRuns().size()
+        );
+    }
+
+    private record DeletionPlan(
+            List<FileImport> imports,
+            Set<Long> importIds,
+            int transactionCount,
+            List<ReconciliationRun> impactedRuns,
+            int resultCount
+    ) {
     }
 
     private record DeletionStats(int deletedImports, int deletedTransactions, int deletedResults, int deletedRuns) {
@@ -916,24 +1065,113 @@ public class FileImportServiceImpl implements FileImportService {
         return digits.length() < 10 ? null : digits;
     }
 
-    private java.time.LocalDateTime parseBankTransactionDate(Map<String, String> row) {
+    private String resolveBankOperationNature(Map<String, String> row) {
         String raw = ParseUtils.firstNonBlank(
-                row.get("Date transaction"),
-                row.get("Date Operation"),
-                row.get("TXDATE_")
+                extractByAliases(row, "OPERATIONNATURE_", "Operation Nature", "Nature operation", "Nature opération"),
+                extractByHeaderContainsAny(row, "operationnature", "natureoperation")
         );
+        String normalized = normalizeHeaderKey(raw);
+        if (normalized == null || normalized.isBlank()) {
+            return raw;
+        }
+        if (normalized.contains("banktowallet") || normalized.contains("banktomoov")) {
+            return "BANK_TO_WALLET";
+        }
+        if (normalized.contains("wallettobank") || normalized.contains("moovtobank")) {
+            return "WALLET_TO_BANK";
+        }
+        return raw;
+    }
+
+    private String extractBankStatus(Map<String, String> row) {
+        String operationNature = resolveBankOperationNature(row);
+        if ("WALLET_TO_BANK".equals(operationNature) || "MOOV_TO_BANK".equals(operationNature)) {
+            String deallocationStatus = ParseUtils.firstNonBlank(
+                    extractByAliases(row, "DEALLOCATIONSTATUS_", "Deallocation Status", "Statut Desallocation", "Statut désallocation"),
+                    extractByHeaderContainsAny(row, "deallocationstatus", "deallocation_status", "desallocationstatus")
+            );
+            if (deallocationStatus != null) {
+                return deallocationStatus;
+            }
+        }
+        return ParseUtils.firstNonBlank(
+                extractByAliases(row, "Statut Allocation", "Statut allocation", "Status", "ALLOCATIONSTATUS_"),
+                extractByHeaderContainsAll(row, "statut", "allocation"),
+                extractByHeaderContainsAny(row, "allocationstatus", "transactionstatus", "status_allocation", "deallocationstatus")
+        );
+    }
+
+    private BigDecimal extractBankAmount(Map<String, String> row) {
+        String operationNature = resolveBankOperationNature(row);
+        if ("WALLET_TO_BANK".equals(operationNature) || "MOOV_TO_BANK".equals(operationNature)) {
+            BigDecimal txAmount = ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(
+                    extractByAliases(row, "TXAMOUNT_", "Transaction Amount", "Montant transaction"),
+                    extractByHeaderContainsAny(row, "txamount", "transaction_amount")
+            ));
+            if (txAmount != null) {
+                return txAmount;
+            }
+        }
+        return ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(
+                extractByAliases(row, "Montant", "Montant nominal", "AMOUNT_", "TXAMOUNT_", "TOTALAMOUNT_"),
+                extractByHeaderContainsAny(row, "montant", "amount", "amount_nominal", "transaction_amount", "txamount", "totalamount")
+        ));
+    }
+
+    private java.time.LocalDateTime parseBankTransactionDate(Map<String, String> row) {
+        String raw = ParseUtils.firstNonBlank(extractByAliases(
+                        row,
+                        "CDATE_",
+                        "Date transaction",
+                        "Date Operation",
+                        "TXDATE_"
+                ),
+                extractByHeaderContainsAny(
+                        row,
+                        "date_transaction",
+                        "transaction_date",
+                        "dateoperation",
+                        "date_operation",
+                        "txdate",
+                        "booking_date",
+                        "operation_date"
+                ));
         if (raw == null || raw.isBlank()) {
             return null;
         }
         String value = raw.trim();
-        if (value.length() >= 19) {
-            value = value.substring(0, 19);
+        // New export format example: "18/04/26 01:44:42,557000000"
+        // Keep only "dd/MM/yy HH:mm:ss" part before optional fractional seconds.
+        int commaIdx = value.indexOf(',');
+        if (commaIdx > 0) {
+            value = value.substring(0, commaIdx);
+        }
+        java.time.LocalDateTime parsed = parseBankDateCandidates(value);
+        if (parsed != null) {
+            return parsed;
+        }
+        return parseBankDateCandidates(raw.trim());
+    }
+
+    private java.time.LocalDateTime parseBankDateCandidates(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
         }
         java.time.LocalDateTime parsed = ParseUtils.parseDateTime(value);
         if (parsed != null) {
             return parsed;
         }
-        return ParseUtils.parseDateTime(raw);
+        try {
+            return java.time.LocalDateTime.parse(value, java.time.format.DateTimeFormatter.ofPattern("dd/MM/yy HH:mm:ss"));
+        } catch (Exception ignored) {
+        }
+        for (String pattern : List.of("dd/MM/yy", "dd/MM/yyyy", "dd-MM-yy", "dd-MM-yyyy", "yyyy-MM-dd")) {
+            try {
+                return java.time.LocalDate.parse(value.trim(), java.time.format.DateTimeFormatter.ofPattern(pattern)).atStartOfDay();
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
     }
 
     private String normalizeAllocationStatusLabel(String raw) {
@@ -944,6 +1182,7 @@ public class FileImportServiceImpl implements FileImportService {
             case "Allocated" -> "Alloué";
             case "PaymentRejected" -> "Paiement rejeté";
             case "AllocationFailed" -> "Echec allocation";
+            case "Deallocated", "PaymentIssued" -> raw.trim();
             default -> raw;
         };
     }
@@ -955,6 +1194,81 @@ public class FileImportServiceImpl implements FileImportService {
         String cleaned = raw.replace("et", " ").replace("ET", " ").trim();
         String digits = cleaned.replaceAll("\\D", "");
         return digits.isBlank() ? null : digits;
+    }
+
+    private String extractBankTransactionId(Map<String, String> row) {
+        return ParseUtils.firstNonBlank(
+                extractByAliases(row, "ID transaction", "Id transaction", "TRANSACTIONID_", "Transaction ID", "transaction_id"),
+                extractByHeaderContainsAll(row, "id", "transaction"),
+                extractByHeaderContainsAny(row, "transactionid", "idtransaction", "operationid", "reference_operation")
+        );
+    }
+
+    private String extractByAliases(Map<String, String> row, String... aliases) {
+        if (row == null || row.isEmpty() || aliases == null || aliases.length == 0) {
+            return null;
+        }
+        for (String alias : aliases) {
+            if (alias == null) continue;
+            String direct = row.get(alias);
+            if (direct != null && !direct.isBlank()) {
+                return direct;
+            }
+        }
+        return null;
+    }
+
+    private String extractByHeaderContainsAll(Map<String, String> row, String... terms) {
+        if (row == null || row.isEmpty() || terms == null || terms.length == 0) {
+            return null;
+        }
+        for (Map.Entry<String, String> e : row.entrySet()) {
+            String header = normalizeHeaderKey(e.getKey());
+            if (header == null || header.isBlank()) continue;
+            boolean allPresent = true;
+            for (String term : terms) {
+                if (term == null) continue;
+                if (!header.contains(normalizeHeaderKey(term))) {
+                    allPresent = false;
+                    break;
+                }
+            }
+            if (allPresent && e.getValue() != null && !e.getValue().isBlank()) {
+                return e.getValue();
+            }
+        }
+        return null;
+    }
+
+    private String extractByHeaderContainsAny(Map<String, String> row, String... terms) {
+        if (row == null || row.isEmpty() || terms == null || terms.length == 0) {
+            return null;
+        }
+        for (Map.Entry<String, String> e : row.entrySet()) {
+            String header = normalizeHeaderKey(e.getKey());
+            if (header == null || header.isBlank()) continue;
+            for (String term : terms) {
+                if (term == null) continue;
+                String normalizedTerm = normalizeHeaderKey(term);
+                if (normalizedTerm != null && !normalizedTerm.isBlank() && header.contains(normalizedTerm)) {
+                    String value = e.getValue();
+                    if (value != null && !value.isBlank()) {
+                        return value;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private String normalizeHeaderKey(String value) {
+        if (value == null) {
+            return null;
+        }
+        return java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .replaceAll("[^a-zA-Z0-9]", "")
+                .toLowerCase();
     }
 }
 

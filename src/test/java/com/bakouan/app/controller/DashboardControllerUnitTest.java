@@ -4,6 +4,7 @@ import com.bakouan.app.dto.dashboard.DashboardSummaryDto;
 import com.bakouan.app.dto.dashboard.DashboardPeriodType;
 import com.bakouan.app.enums.OperatorType;
 import com.bakouan.app.service.DashboardService;
+import com.bakouan.app.service.ReportingService;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.web.server.ResponseStatusException;
@@ -22,7 +23,8 @@ class DashboardControllerUnitTest {
     @Test
     void shouldReturnSummaryForValidFilters() {
         DashboardService service = Mockito.mock(DashboardService.class);
-        DashboardController controller = new DashboardController(service);
+        ReportingService reportingService = Mockito.mock(ReportingService.class);
+        DashboardController controller = new DashboardController(service, reportingService);
         DashboardSummaryDto expected = new DashboardSummaryDto(
                 DashboardPeriodType.DAY,
                 LocalDate.of(2026, 3, 11),
@@ -52,7 +54,8 @@ class DashboardControllerUnitTest {
     @Test
     void shouldRejectInvalidDateCombination() {
         DashboardService service = Mockito.mock(DashboardService.class);
-        DashboardController controller = new DashboardController(service);
+        ReportingService reportingService = Mockito.mock(ReportingService.class);
+        DashboardController controller = new DashboardController(service, reportingService);
 
         assertThatThrownBy(() -> controller.summary(
                 null,
@@ -67,7 +70,8 @@ class DashboardControllerUnitTest {
     @Test
     void shouldAllowMissingDateWhenRunIdIsProvided() {
         DashboardService service = Mockito.mock(DashboardService.class);
-        DashboardController controller = new DashboardController(service);
+        ReportingService reportingService = Mockito.mock(ReportingService.class);
+        DashboardController controller = new DashboardController(service, reportingService);
         DashboardSummaryDto expected = new DashboardSummaryDto(
                 DashboardPeriodType.DAY,
                 null,

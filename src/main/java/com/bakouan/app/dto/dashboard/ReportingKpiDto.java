@@ -19,6 +19,14 @@ public record ReportingKpiDto(
         BigDecimal montantTotalOperateur,
         BigDecimal montantAnomalies,
         BigDecimal ecartGlobal,
+        long operateurSuccessCount,
+        BigDecimal operateurSuccessAmount,
+        long bankSuccessCount,
+        BigDecimal bankSuccessAmount,
+        long operateurSuccessSansCarthagoCount,
+        BigDecimal operateurSuccessSansCarthagoAmount,
+        long operateurHorsPerimetreCount,
+        BigDecimal operateurHorsPerimetreAmount,
         BigDecimal moyenneJournaliereTransactions,
         LocalVolumePeakDto picVolumeJournalier
 ) {

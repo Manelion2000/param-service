@@ -37,20 +37,22 @@ public class DashboardServiceImpl implements DashboardService {
     @Override
     public DashboardSummaryDto summary(DashboardFilterRequest filter) {
         FilteredData data = loadFilteredData(filter);
-        Amounts amounts = computeAmounts(data.results);
-        long totalBank = data.results.stream().filter(r -> r.getBankTransactionId() != null).count();
-        long totalOperator = data.results.stream().filter(r -> r.getMoovTransactionId() != null).count();
+        List<ReconciliationResult> financialRows = data.results.stream().filter(this::isFinanciallyRelevant).toList();
+        Amounts amounts = computeAmounts(financialRows);
+        long totalBank = financialRows.stream().filter(r -> r.getBankTransactionId() != null).count();
+        long totalOperator = financialRows.stream().filter(r -> r.getMoovTransactionId() != null).count();
         long totalResults = data.results.size();
-        long matchOk = count(data.results, ReconciliationResultType.MATCH_OK);
-        long debitATort = count(data.results, ReconciliationResultType.DEBIT_A_TORT);
-        long creditSansDebit = count(data.results, ReconciliationResultType.CREDIT_SANS_DEBIT);
-        long echecDesDeuxCotes = count(data.results, ReconciliationResultType.ECHEC_DES_DEUX_COTES);
-        long absentCoteOperateur = count(data.results, operatorAbsentType(filter.channel()));
-        long absentCoteBanque = count(data.results, ReconciliationResultType.ABSENT_COTE_BANQUE);
-        long montantDifferent = count(data.results, ReconciliationResultType.MONTANT_DIFFERENT);
-        long statutInconnu = count(data.results, ReconciliationResultType.STATUT_INCONNU);
-        long doublons = count(data.results, ReconciliationResultType.DOUBLON_BANQUE) + count(data.results, ReconciliationResultType.DOUBLON_MOOV);
-        long anomalies = totalResults - matchOk;
+        long financialTotal = financialRows.size();
+        long matchOk = count(financialRows, ReconciliationResultType.MATCH_OK);
+        long debitATort = count(financialRows, ReconciliationResultType.DEBIT_A_TORT);
+        long creditSansDebit = count(financialRows, ReconciliationResultType.CREDIT_SANS_DEBIT);
+        long echecDesDeuxCotes = count(financialRows, ReconciliationResultType.ECHEC_DES_DEUX_COTES);
+        long absentCoteOperateur = count(financialRows, operatorAbsentType(filter.channel()));
+        long absentCoteBanque = count(financialRows, ReconciliationResultType.ABSENT_COTE_BANQUE);
+        long montantDifferent = count(financialRows, ReconciliationResultType.MONTANT_DIFFERENT);
+        long statutInconnu = count(financialRows, ReconciliationResultType.STATUT_INCONNU);
+        long doublons = count(financialRows, ReconciliationResultType.DOUBLON_BANQUE) + count(financialRows, ReconciliationResultType.DOUBLON_MOOV);
+        long anomalies = financialTotal - matchOk;
         long invalidRows = data.invalidRows;
 
         return new DashboardSummaryDto(
@@ -73,8 +75,8 @@ public class DashboardServiceImpl implements DashboardService {
                 doublons,
                 invalidRows,
                 rate(matchOk, totalBank),
-                rate(matchOk, totalResults),
-                rate(anomalies, totalResults),
+                rate(matchOk, financialTotal),
+                rate(anomalies, financialTotal),
                 amounts.bankTotal,
                 amounts.operatorTotal,
                 amounts.anomaliesTotal,
@@ -84,16 +86,11 @@ public class DashboardServiceImpl implements DashboardService {
 
     @Override
     public List<ResultDistributionDto> resultsDistribution(DashboardFilterRequest filter) {
-        List<ReconciliationRun> runs = resolveRuns(filter);
-        List<Long> runIds = runs.stream().map(ReconciliationRun::getId).toList();
-        if (runIds.isEmpty()) {
-            return List.of();
-        }
-        List<ResultTypeCountView> grouped = resultRepository.countByResultTypeForRuns(runIds, filter.effectiveFrom(), filter.effectiveTo());
+        FilteredData data = loadFilteredData(filter);
         Map<DashboardResultTypeView, Long> distribution = new EnumMap<>(DashboardResultTypeView.class);
-        for (ResultTypeCountView row : grouped) {
+        for (ReconciliationResult row : data.results) {
             DashboardResultTypeView view = toViewType(row.getResultType(), filter.channel());
-            distribution.put(view, distribution.getOrDefault(view, 0L) + row.getCount());
+            distribution.put(view, distribution.getOrDefault(view, 0L) + 1L);
         }
         return Arrays.stream(DashboardResultTypeView.values())
                 .map(type -> new ResultDistributionDto(type, distribution.getOrDefault(type, 0L)))
@@ -103,24 +100,12 @@ public class DashboardServiceImpl implements DashboardService {
 
     @Override
     public DashboardAmountsDto amounts(DashboardFilterRequest filter) {
-        List<ReconciliationRun> runs = resolveRuns(filter);
-        List<Long> runIds = runs.stream().map(ReconciliationRun::getId).toList();
-        if (runIds.isEmpty()) {
-            return new DashboardAmountsDto(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
-        }
-        AmountsView sums = resultRepository.sumsForRuns(runIds, filter.effectiveFrom(), filter.effectiveTo());
-        List<ReconciliationResult> anomaliesRows = resultRepository.findByRunIdIn(runIds).stream()
-                .filter(this::isAnomaly)
-                .filter(r -> inDateRange(r.getBusinessDate(), filter.effectiveFrom(), filter.effectiveTo()))
-                .toList();
-        BigDecimal anomalies = anomaliesRows.stream().map(this::anomalyAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal bank = sums == null || sums.getBankTotal() == null ? BigDecimal.ZERO : sums.getBankTotal();
-        BigDecimal operator = sums == null || sums.getOperatorTotal() == null ? BigDecimal.ZERO : sums.getOperatorTotal();
+        Amounts amounts = computeAmounts(loadFilteredData(filter).results.stream().filter(this::isFinanciallyRelevant).toList());
         return new DashboardAmountsDto(
-                bank,
-                operator,
-                anomalies,
-                bank.subtract(operator)
+                amounts.bankTotal,
+                amounts.operatorTotal,
+                amounts.anomaliesTotal,
+                amounts.ecartGlobal
         );
     }
 
@@ -131,11 +116,16 @@ public class DashboardServiceImpl implements DashboardService {
         Map<Integer, Long> anomalyByHour = new HashMap<>();
         Set<String> anomalyKeys = data.results.stream()
                 .filter(r -> r.getResultType() != ReconciliationResultType.MATCH_OK)
+                .filter(this::isFinanciallyRelevant)
                 .map(ReconciliationResult::getTransactionKey)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
 
-        List<BankTransaction> bankRows = bankTransactionRepository.findByFileImportIdIn(data.bankImportIds);
+        Set<Long> bankTransactionIds = data.results.stream()
+                .map(ReconciliationResult::getBankTransactionId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        List<BankTransaction> bankRows = bankTransactionIds.isEmpty() ? List.of() : bankTransactionRepository.findAllById(bankTransactionIds);
         for (BankTransaction tx : bankRows) {
             if (tx.getTransactionDate() == null) {
                 continue;
@@ -148,7 +138,11 @@ public class DashboardServiceImpl implements DashboardService {
         }
 
         if (filter.channel() == OperatorType.MOOV) {
-            List<MoovTransaction> rows = moovTransactionRepository.findByFileImportIdIn(data.operatorImportIds).stream()
+            Set<Long> operatorTransactionIds = data.results.stream()
+                    .map(ReconciliationResult::getMoovTransactionId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toSet());
+            List<MoovTransaction> rows = operatorTransactionIds.isEmpty() ? List.of() : moovTransactionRepository.findAllById(operatorTransactionIds).stream()
                     .filter(r -> r.getCompletionTime() != null || r.getInitiationTime() != null)
                     .toList();
             for (MoovTransaction tx : rows) {
@@ -160,7 +154,11 @@ public class DashboardServiceImpl implements DashboardService {
                 }
             }
         } else {
-            List<OrangeTransaction> rows = orangeTransactionRepository.findByFileImportIdIn(data.operatorImportIds).stream()
+            Set<Long> operatorTransactionIds = data.results.stream()
+                    .map(ReconciliationResult::getMoovTransactionId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toSet());
+            List<OrangeTransaction> rows = operatorTransactionIds.isEmpty() ? List.of() : orangeTransactionRepository.findAllById(operatorTransactionIds).stream()
                     .filter(r -> r.getTransactionDateTime() != null)
                     .toList();
             for (OrangeTransaction tx : rows) {
@@ -177,16 +175,17 @@ public class DashboardServiceImpl implements DashboardService {
 
     @Override
     public Page<TopAnomalyDto> topAnomalies(DashboardFilterRequest filter, Pageable pageable) {
-        List<ReconciliationRun> runs = resolveRuns(filter);
-        List<Long> runIds = runs.stream().map(ReconciliationRun::getId).toList();
-        if (runIds.isEmpty()) {
-            return Page.empty(pageable);
-        }
-        Page<ReconciliationResult> results = resultRepository.findTopAnomaliesForRuns(runIds, filter.effectiveFrom(), filter.effectiveTo(), pageable);
-        List<TopAnomalyDto> page = results.getContent().stream()
+        List<TopAnomalyDto> anomalies = loadFilteredData(filter).results.stream()
+                .filter(this::isAnomaly)
+                .sorted(Comparator.comparing(this::anomalyAmount).reversed())
                 .map(this::toTopAnomalyDto)
                 .toList();
-        return new PageImpl<>(page, pageable, results.getTotalElements());
+        if (anomalies.isEmpty()) {
+            return Page.empty(pageable);
+        }
+        int start = Math.toIntExact(Math.min(pageable.getOffset(), anomalies.size()));
+        int end = Math.min(start + pageable.getPageSize(), anomalies.size());
+        return new PageImpl<>(anomalies.subList(start, end), pageable, anomalies.size());
     }
 
     @Override
@@ -197,6 +196,10 @@ public class DashboardServiceImpl implements DashboardService {
         long invalidRows = data.invalidRows;
         long duplicateCount = count(data.results, ReconciliationResultType.DOUBLON_BANQUE)
                 + count(data.results, ReconciliationResultType.DOUBLON_MOOV);
+        long operatorOutOfScopeCount = count(
+                data.results,
+                ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE
+        );
         long parsedRows = validRows + invalidRows;
         return new DataQualityDto(
                 totalImports,
@@ -205,7 +208,9 @@ public class DashboardServiceImpl implements DashboardService {
                 rate(validRows, parsedRows),
                 duplicateCount,
                 rate(duplicateCount, validRows),
-                rate(invalidRows, parsedRows)
+                rate(invalidRows, parsedRows),
+                operatorOutOfScopeCount,
+                rate(operatorOutOfScopeCount, data.results.size())
         );
     }
 
@@ -216,9 +221,9 @@ public class DashboardServiceImpl implements DashboardService {
         LocalDate from = filter.effectiveFrom();
         LocalDate to = filter.effectiveTo();
         if (from != null && to != null) {
+            TransactionDateLookup lookup = buildTransactionDateLookup(rows, filter.channel());
             rows = rows.stream()
-                    .filter(r -> r.getBusinessDate() != null)
-                    .filter(r -> !r.getBusinessDate().isBefore(from) && !r.getBusinessDate().isAfter(to))
+                    .filter(r -> inDateRange(resolveTransactionDate(r, lookup), from, to))
                     .toList();
         }
 
@@ -250,16 +255,19 @@ public class DashboardServiceImpl implements DashboardService {
                     .map(List::of)
                     .orElse(List.of());
         }
+        List<ReconciliationRun> runs;
         LocalDate from = filter.effectiveFrom();
         LocalDate to = filter.effectiveTo();
-        List<ReconciliationRun> runs;
         if (from != null && to != null) {
             runs = runRepository.findByOperatorAndBusinessDateOverlap(filter.channel(), from, to, Pageable.unpaged()).getContent();
         } else {
             runs = runRepository.findByOperator(filter.channel(), Pageable.unpaged()).getContent();
         }
         if (filter.importId() == null) {
-            return runs;
+            return runs.stream()
+                    .max(Comparator.comparing(ReconciliationRun::getStartedAt, Comparator.nullsFirst(Comparator.naturalOrder())))
+                    .map(List::of)
+                    .orElse(List.of());
         }
         return runs.stream()
                 .filter(run -> parseCsvIds(run.getBankImportIds()).contains(filter.importId())
@@ -271,29 +279,68 @@ public class DashboardServiceImpl implements DashboardService {
         if (filter.importId() != null) {
             return fileImportRepository.findById(filter.importId()).map(List::of).orElse(List.of());
         }
-        LocalDate from = filter.effectiveFrom();
-        LocalDate to = filter.effectiveTo();
-        SourceType operatorSource = filter.channel() == OperatorType.MOOV ? SourceType.MOOV : SourceType.ORANGE;
-        List<FileImport> bankImports = from != null && to != null
-                ? fileImportRepository.findBySourceTypeAndOperatorScopeAndBusinessDateBetween(SourceType.BANQUE, filter.channel(), from, to)
-                : fileImportRepository.findBySourceTypeAndOperatorScope(SourceType.BANQUE, filter.channel());
-        List<FileImport> operatorImports = from != null && to != null
-                ? fileImportRepository.findBySourceTypeAndBusinessDateBetween(operatorSource, from, to)
-                : fileImportRepository.findBySourceType(operatorSource);
-
         Set<Long> runImportIds = new HashSet<>();
         for (ReconciliationRun run : runs) {
             runImportIds.addAll(parseCsvIds(run.getBankImportIds()));
             runImportIds.addAll(parseCsvIds(filter.channel() == OperatorType.MOOV ? run.getMoovImportIds() : run.getOrangeImportIds()));
         }
-        return java.util.stream.Stream.concat(bankImports.stream(), operatorImports.stream())
-                .filter(f -> runImportIds.contains(f.getId()))
-                .toList();
+        return runImportIds.isEmpty() ? List.of() : fileImportRepository.findAllById(runImportIds);
+    }
+
+    private TransactionDateLookup buildTransactionDateLookup(List<ReconciliationResult> rows, OperatorType channel) {
+        Set<Long> bankTransactionIds = rows.stream()
+                .map(ReconciliationResult::getBankTransactionId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Set<Long> operatorTransactionIds = rows.stream()
+                .map(ReconciliationResult::getMoovTransactionId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        Map<Long, LocalDate> bankDates = bankTransactionIds.isEmpty() ? Map.of() : bankTransactionRepository.findAllById(bankTransactionIds).stream()
+                .filter(tx -> tx.getTransactionDate() != null)
+                .collect(Collectors.toMap(BankTransaction::getId, tx -> tx.getTransactionDate().toLocalDate(), (left, right) -> left));
+        Map<Long, LocalDate> operatorDates = operatorTransactionIds.isEmpty() ? Map.of() : loadOperatorTransactionDates(operatorTransactionIds, channel);
+        return new TransactionDateLookup(bankDates, operatorDates);
+    }
+
+    private Map<Long, LocalDate> loadOperatorTransactionDates(Set<Long> transactionIds, OperatorType channel) {
+        if (channel == OperatorType.MOOV) {
+            return moovTransactionRepository.findAllById(transactionIds).stream()
+                    .filter(tx -> tx.getCompletionTime() != null || tx.getInitiationTime() != null)
+                    .collect(Collectors.toMap(
+                            MoovTransaction::getId,
+                            tx -> (tx.getCompletionTime() != null ? tx.getCompletionTime() : tx.getInitiationTime()).toLocalDate(),
+                            (left, right) -> left
+                    ));
+        }
+        return orangeTransactionRepository.findAllById(transactionIds).stream()
+                .filter(tx -> tx.getTransactionDateTime() != null)
+                .collect(Collectors.toMap(OrangeTransaction::getId, tx -> tx.getTransactionDateTime().toLocalDate(), (left, right) -> left));
+    }
+
+    private LocalDate resolveTransactionDate(ReconciliationResult row, TransactionDateLookup lookup) {
+        if (row.getBankTransactionId() != null) {
+            LocalDate bankDate = lookup.bankDates().get(row.getBankTransactionId());
+            if (bankDate != null) {
+                return bankDate;
+            }
+        }
+        if (row.getMoovTransactionId() != null) {
+            LocalDate operatorDate = lookup.operatorDates().get(row.getMoovTransactionId());
+            if (operatorDate != null) {
+                return operatorDate;
+            }
+        }
+        return row.getBusinessDate();
     }
 
     private Amounts computeAmounts(List<ReconciliationResult> rows) {
-        BigDecimal bankTotal = rows.stream().map(ReconciliationResult::getBankAmount).filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal operatorTotal = rows.stream().map(ReconciliationResult::getMoovAmount).filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+        List<ReconciliationResult> completedRows = rows.stream()
+                .filter(this::isCompletedOnBothSides)
+                .toList();
+        BigDecimal bankTotal = completedRows.stream().map(ReconciliationResult::getBankAmount).filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal operatorTotal = completedRows.stream().map(ReconciliationResult::getMoovAmount).filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal anomaliesTotal = rows.stream()
                 .filter(this::isAnomaly)
                 .map(this::anomalyAmount)
@@ -338,6 +385,7 @@ public class DashboardServiceImpl implements DashboardService {
             case ECHEC_DES_DEUX_COTES -> DashboardResultTypeView.ECHEC_DES_DEUX_COTES;
             case ABSENT_COTE_BANQUE -> DashboardResultTypeView.ABSENT_COTE_BANQUE;
             case ABSENT_COTE_MOOV, ABSENT_COTE_ORANGE -> DashboardResultTypeView.ABSENT_COTE_OPERATEUR;
+            case OPERATEUR_NON_ABOUTI_SANS_BANQUE -> DashboardResultTypeView.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
             case MONTANT_DIFFERENT -> DashboardResultTypeView.MONTANT_DIFFERENT;
             case STATUT_INCONNU -> DashboardResultTypeView.STATUT_INCONNU;
             case DOUBLON_BANQUE, DOUBLON_MOOV -> DashboardResultTypeView.DOUBLONS;
@@ -359,7 +407,20 @@ public class DashboardServiceImpl implements DashboardService {
     }
 
     private boolean isAnomaly(ReconciliationResult row) {
-        return row.getResultType() != ReconciliationResultType.MATCH_OK;
+        return isFinanciallyRelevant(row) && row.getResultType() != ReconciliationResultType.MATCH_OK;
+    }
+
+    private boolean isFinanciallyRelevant(ReconciliationResult row) {
+        return row.getResultType() != ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
+    }
+
+    private boolean isCompletedOnBothSides(ReconciliationResult row) {
+        return row.getBankTransactionId() != null
+                && row.getMoovTransactionId() != null
+                && row.getBankAmount() != null
+                && row.getMoovAmount() != null
+                && (row.getResultType() == ReconciliationResultType.MATCH_OK
+                || row.getResultType() == ReconciliationResultType.MONTANT_DIFFERENT);
     }
 
     private ReconciliationResultType operatorAbsentType(OperatorType channel) {
@@ -415,6 +476,9 @@ public class DashboardServiceImpl implements DashboardService {
             Set<Long> bankImportIds,
             Set<Long> operatorImportIds
     ) {
+    }
+
+    private record TransactionDateLookup(Map<Long, LocalDate> bankDates, Map<Long, LocalDate> operatorDates) {
     }
 
     private record Amounts(BigDecimal bankTotal, BigDecimal operatorTotal, BigDecimal anomaliesTotal, BigDecimal ecartGlobal) {

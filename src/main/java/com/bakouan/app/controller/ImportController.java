@@ -65,23 +65,32 @@ public class ImportController {
     }
 
     @DeleteMapping("/{sourceType}/latest")
-    public ImportDeletionResult deleteLatest(@PathVariable SourceType sourceType) {
-        return fileImportService.deleteLatestImport(sourceType);
+    public ImportDeletionResult deleteLatest(
+            @PathVariable SourceType sourceType,
+            @RequestParam(value = "confirmCascade", defaultValue = "false") boolean confirmCascade) {
+        return fileImportService.deleteLatestImport(sourceType, confirmCascade);
     }
 
     @DeleteMapping("/{sourceType}")
     public ImportBulkDeletionResult deleteBySourceAndBusinessDate(
             @PathVariable SourceType sourceType,
             @RequestParam(value = "operator", required = false) OperatorType operator,
-            @RequestParam("businessDate") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate businessDate) {
-        return fileImportService.deleteImportsBySourceAndBusinessDate(sourceType, operator, businessDate);
+            @RequestParam("businessDate") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate businessDate,
+            @RequestParam(value = "confirmCascade", defaultValue = "false") boolean confirmCascade) {
+        return fileImportService.deleteImportsBySourceAndBusinessDate(
+                sourceType,
+                operator,
+                businessDate,
+                confirmCascade
+        );
     }
 
     @DeleteMapping("/{sourceType}/all")
     public ImportFullDeletionResult deleteAllBySource(
             @PathVariable SourceType sourceType,
-            @RequestParam(value = "operator", required = false) OperatorType operator) {
-        return fileImportService.deleteAllImportsBySource(sourceType, operator);
+            @RequestParam(value = "operator", required = false) OperatorType operator,
+            @RequestParam(value = "confirmCascade", defaultValue = "false") boolean confirmCascade) {
+        return fileImportService.deleteAllImportsBySource(sourceType, operator, confirmCascade);
     }
 
     @GetMapping("/{sourceType}/preview-delete")

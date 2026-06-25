@@ -1,6 +1,9 @@
 package com.bakouan.app.service.impl;
 
 import com.bakouan.app.dto.dashboard.*;
+import com.bakouan.app.enums.NormalizedBankStatus;
+import com.bakouan.app.enums.NormalizedMoovStatus;
+import com.bakouan.app.enums.NormalizedOrangeStatus;
 import com.bakouan.app.enums.OperatorType;
 import com.bakouan.app.enums.ReconciliationResultType;
 import com.bakouan.app.model.ReconciliationResult;
@@ -43,7 +46,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ReportingServiceImpl implements ReportingService {
 
-    private static final int MAX_DETAILS_JSON = 300;
+    private static final int MAX_DETAILS_JSON = 1000;
 
     private final ReconciliationRunRepository runRepository;
     private final ReconciliationResultRepository resultRepository;
@@ -103,6 +106,15 @@ public class ReportingServiceImpl implements ReportingService {
                     "Montant Banque: " + k.montantTotalBanque() + " | Montant Operateur: " + k.montantTotalOperateur());
             y = writeLine(stream, 40, y, fontRegular, 10,
                     "Ecart global: " + k.ecartGlobal() + " | Montant anomalies: " + k.montantAnomalies());
+            y = writeLine(stream, 40, y, fontRegular, 10,
+                    "Succes operateur: " + k.operateurSuccessCount() + " | Montant: " + k.operateurSuccessAmount()
+                            + " | Succes Carthago: " + k.bankSuccessCount() + " | Montant: " + k.bankSuccessAmount());
+            y = writeLine(stream, 40, y, fontRegular, 10,
+                    "Succes operateur sans Carthago: " + k.operateurSuccessSansCarthagoCount()
+                            + " | Montant: " + k.operateurSuccessSansCarthagoAmount());
+            y = writeLine(stream, 40, y, fontRegular, 10,
+                    "Hors perimetre operateur: " + k.operateurHorsPerimetreCount()
+                            + " | Montant: " + k.operateurHorsPerimetreAmount());
             y = writeLine(stream, 40, y - 4, fontBold, 11, "Synthese Executive");
             for (String insight : buildExecutiveInsights(summary)) {
                 y = writeLine(stream, 40, y, fontRegular, 10, "- " + insight);
@@ -137,11 +149,13 @@ public class ReportingServiceImpl implements ReportingService {
                                           ReportData data,
                                           int maxDetails) {
         List<ReportingRow> rows = data.rows();
-        Map<DashboardResultTypeView, Long> distribution = buildDistribution(rows, channel);
-        List<ReportingDailyBreakdownDto> daily = buildDailyBreakdown(rows, window);
+        List<ReportingRow> financialRows = rows.stream().filter(this::isFinanciallyRelevant).toList();
+        Map<DashboardResultTypeView, Long> distribution = buildDistribution(financialRows, channel);
+        List<ReportingDailyBreakdownDto> daily = buildDailyBreakdown(financialRows, window);
         ReportingKpiDto kpis = buildKpis(rows, channel, daily);
-        List<ReportingTransactionDetailDto> details = rows.stream()
-                .sorted(Comparator.comparing(ReportingRow::transactionDate, Comparator.nullsLast(Comparator.reverseOrder()))
+        List<ReportingTransactionDetailDto> details = financialRows.stream()
+                .sorted(Comparator.comparing((ReportingRow r) -> detailPriority(r, channel))
+                        .thenComparing(ReportingRow::transactionDate, Comparator.nullsLast(Comparator.reverseOrder()))
                         .thenComparing(r -> r.result().getCreatedAt(), Comparator.nullsLast(Comparator.reverseOrder())))
                 .limit(maxDetails)
                 .map(r -> toDetail(r, channel))
@@ -175,23 +189,34 @@ public class ReportingServiceImpl implements ReportingService {
     }
 
     private ReportingKpiDto buildKpis(List<ReportingRow> rows, OperatorType channel, List<ReportingDailyBreakdownDto> daily) {
-        long total = rows.size();
-        long match = count(rows, ReconciliationResultType.MATCH_OK);
+        List<ReportingRow> financialRows = rows.stream().filter(this::isFinanciallyRelevant).toList();
+        List<ReportingRow> operatorOutOfScopeRows = rows.stream().filter(this::isOperatorOutOfScope).toList();
+        long total = financialRows.size();
+        long match = count(financialRows, ReconciliationResultType.MATCH_OK);
         long anomalies = total - match;
-        long debitATort = count(rows, ReconciliationResultType.DEBIT_A_TORT);
-        long creditSansDebit = count(rows, ReconciliationResultType.CREDIT_SANS_DEBIT);
-        long absentBanque = count(rows, ReconciliationResultType.ABSENT_COTE_BANQUE);
-        long absentOperateur = count(rows, channel == OperatorType.MOOV ? ReconciliationResultType.ABSENT_COTE_MOOV : ReconciliationResultType.ABSENT_COTE_ORANGE);
-        long montantDifferent = count(rows, ReconciliationResultType.MONTANT_DIFFERENT);
-        long doublons = count(rows, ReconciliationResultType.DOUBLON_BANQUE) + count(rows, ReconciliationResultType.DOUBLON_MOOV);
-        long statutInconnu = count(rows, ReconciliationResultType.STATUT_INCONNU);
+        long debitATort = count(financialRows, ReconciliationResultType.DEBIT_A_TORT);
+        long creditSansDebit = count(financialRows, ReconciliationResultType.CREDIT_SANS_DEBIT);
+        long absentBanque = count(financialRows, ReconciliationResultType.ABSENT_COTE_BANQUE);
+        long absentOperateur = count(financialRows, channel == OperatorType.MOOV ? ReconciliationResultType.ABSENT_COTE_MOOV : ReconciliationResultType.ABSENT_COTE_ORANGE);
+        long montantDifferent = count(financialRows, ReconciliationResultType.MONTANT_DIFFERENT);
+        long doublons = count(financialRows, ReconciliationResultType.DOUBLON_BANQUE) + count(financialRows, ReconciliationResultType.DOUBLON_MOOV);
+        long statutInconnu = count(financialRows, ReconciliationResultType.STATUT_INCONNU);
 
-        BigDecimal bankTotal = sum(rows, r -> r.result().getBankAmount());
-        BigDecimal operatorTotal = sum(rows, r -> r.result().getMoovAmount());
-        BigDecimal anomaliesAmount = rows.stream()
+        BigDecimal bankTotal = sum(financialRows, r -> r.result().getBankAmount());
+        BigDecimal operatorTotal = sum(financialRows, r -> r.result().getMoovAmount());
+        BigDecimal anomaliesAmount = financialRows.stream()
                 .filter(r -> r.result().getResultType() != ReconciliationResultType.MATCH_OK)
                 .map(r -> anomalyAmount(r.result()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+        List<ReportingRow> operatorSuccessRows = rows.stream().filter(ReportingRow::operatorSuccess).toList();
+        List<ReportingRow> bankSuccessRows = rows.stream().filter(ReportingRow::bankSuccess).toList();
+        List<ReportingRow> operatorSuccessWithoutCarthagoRows = operatorSuccessRows.stream()
+                .filter(r -> r.result().getBankTransactionId() == null)
+                .toList();
+        BigDecimal operatorSuccessAmount = sum(operatorSuccessRows, ReportingRow::operatorAmount);
+        BigDecimal bankSuccessAmount = sum(bankSuccessRows, ReportingRow::bankAmount);
+        BigDecimal operatorSuccessWithoutCarthagoAmount = sum(operatorSuccessWithoutCarthagoRows, ReportingRow::operatorAmount);
+        BigDecimal operatorOutOfScopeAmount = sum(operatorOutOfScopeRows, r -> r.result().getMoovAmount());
         BigDecimal avgDaily = daily.isEmpty()
                 ? BigDecimal.ZERO
                 : BigDecimal.valueOf(total).divide(BigDecimal.valueOf(daily.size()), 2, RoundingMode.HALF_UP);
@@ -217,6 +242,14 @@ public class ReportingServiceImpl implements ReportingService {
                 operatorTotal,
                 anomaliesAmount,
                 bankTotal.subtract(operatorTotal),
+                operatorSuccessRows.size(),
+                operatorSuccessAmount,
+                bankSuccessRows.size(),
+                bankSuccessAmount,
+                operatorSuccessWithoutCarthagoRows.size(),
+                operatorSuccessWithoutCarthagoAmount,
+                operatorOutOfScopeRows.size(),
+                operatorOutOfScopeAmount,
                 avgDaily,
                 peak
         );
@@ -224,6 +257,7 @@ public class ReportingServiceImpl implements ReportingService {
 
     private List<ReportingDailyBreakdownDto> buildDailyBreakdown(List<ReportingRow> rows, ReportWindow window) {
         Map<LocalDate, List<ReportingRow>> byDay = rows.stream()
+                .filter(this::isFinanciallyRelevant)
                 .filter(r -> r.transactionDate() != null)
                 .collect(Collectors.groupingBy(ReportingRow::transactionDate));
 
@@ -254,10 +288,28 @@ public class ReportingServiceImpl implements ReportingService {
     private Map<DashboardResultTypeView, Long> buildDistribution(List<ReportingRow> rows, OperatorType channel) {
         Map<DashboardResultTypeView, Long> distribution = new EnumMap<>(DashboardResultTypeView.class);
         for (ReportingRow row : rows) {
-            DashboardResultTypeView view = toViewType(row.result().getResultType(), channel);
+            DashboardResultTypeView view = toViewType(row, channel);
             distribution.put(view, distribution.getOrDefault(view, 0L) + 1L);
         }
         return distribution;
+    }
+
+    private DashboardResultTypeView toViewType(ReportingRow row, OperatorType channel) {
+        if (row.operatorSuccess() && row.result().getBankTransactionId() == null) {
+            return DashboardResultTypeView.OPERATEUR_ABOUTI_SANS_CARTHAGO;
+        }
+        return toViewType(row.result().getResultType(), channel);
+    }
+
+    private int detailPriority(ReportingRow row, OperatorType channel) {
+        DashboardResultTypeView viewType = toViewType(row, channel);
+        if (viewType == DashboardResultTypeView.OPERATEUR_ABOUTI_SANS_CARTHAGO) {
+            return 0;
+        }
+        if (viewType != DashboardResultTypeView.MATCH_OK) {
+            return 1;
+        }
+        return 2;
     }
 
     private DashboardResultTypeView toViewType(ReconciliationResultType type, OperatorType channel) {
@@ -268,6 +320,7 @@ public class ReportingServiceImpl implements ReportingService {
             case ECHEC_DES_DEUX_COTES -> DashboardResultTypeView.ECHEC_DES_DEUX_COTES;
             case ABSENT_COTE_BANQUE -> DashboardResultTypeView.ABSENT_COTE_BANQUE;
             case ABSENT_COTE_MOOV, ABSENT_COTE_ORANGE -> DashboardResultTypeView.ABSENT_COTE_OPERATEUR;
+            case OPERATEUR_NON_ABOUTI_SANS_BANQUE -> DashboardResultTypeView.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
             case MONTANT_DIFFERENT -> DashboardResultTypeView.MONTANT_DIFFERENT;
             case STATUT_INCONNU -> DashboardResultTypeView.STATUT_INCONNU;
             case DOUBLON_BANQUE, DOUBLON_MOOV -> DashboardResultTypeView.DOUBLONS;
@@ -287,7 +340,7 @@ public class ReportingServiceImpl implements ReportingService {
         return new ReportingTransactionDetailDto(
                 row.transactionDate(),
                 r.getTransactionKey(),
-                toViewType(r.getResultType(), channel),
+                toViewType(row, channel),
                 direction,
                 r.getBankStatusRaw(),
                 r.getMoovStatusRaw(),
@@ -315,6 +368,14 @@ public class ReportingServiceImpl implements ReportingService {
         rowIdx = writeKv(sheet, rowIdx, "Montant operateur", k.montantTotalOperateur());
         rowIdx = writeKv(sheet, rowIdx, "Montant anomalies", k.montantAnomalies());
         rowIdx = writeKv(sheet, rowIdx, "Ecart global", k.ecartGlobal());
+        rowIdx = writeKv(sheet, rowIdx, "Succes operateur (count)", k.operateurSuccessCount());
+        rowIdx = writeKv(sheet, rowIdx, "Succes operateur (montant)", k.operateurSuccessAmount());
+        rowIdx = writeKv(sheet, rowIdx, "Succes Carthago (count)", k.bankSuccessCount());
+        rowIdx = writeKv(sheet, rowIdx, "Succes Carthago (montant)", k.bankSuccessAmount());
+        rowIdx = writeKv(sheet, rowIdx, "Succes operateur sans Carthago (count)", k.operateurSuccessSansCarthagoCount());
+        rowIdx = writeKv(sheet, rowIdx, "Succes operateur sans Carthago (montant)", k.operateurSuccessSansCarthagoAmount());
+        rowIdx = writeKv(sheet, rowIdx, "Operateur hors perimetre (count)", k.operateurHorsPerimetreCount());
+        rowIdx = writeKv(sheet, rowIdx, "Operateur hors perimetre (montant)", k.operateurHorsPerimetreAmount());
         rowIdx = writeKv(sheet, rowIdx, "Moyenne journaliere", k.moyenneJournaliereTransactions());
         rowIdx = writeKv(sheet, rowIdx, "Pic volume (date)", k.picVolumeJournalier().businessDate());
         writeKv(sheet, rowIdx, "Pic volume (count)", k.picVolumeJournalier().totalTransactions());
@@ -421,6 +482,14 @@ public class ReportingServiceImpl implements ReportingService {
         return rows.stream().filter(r -> r.result().getResultType() == type).count();
     }
 
+    private boolean isFinanciallyRelevant(ReportingRow row) {
+        return row.result().getResultType() != ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
+    }
+
+    private boolean isOperatorOutOfScope(ReportingRow row) {
+        return row.result().getResultType() == ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
+    }
+
     private BigDecimal anomalyAmount(ReconciliationResult row) {
         if (row.getAmountDifference() != null) {
             return row.getAmountDifference().abs();
@@ -469,28 +538,53 @@ public class ReportingServiceImpl implements ReportingService {
         Set<Long> bankIds = results.stream().map(ReconciliationResult::getBankTransactionId).filter(Objects::nonNull).collect(Collectors.toSet());
         Set<Long> operatorIds = results.stream().map(ReconciliationResult::getMoovTransactionId).filter(Objects::nonNull).collect(Collectors.toSet());
 
-        Map<Long, LocalDate> bankDates = bankTransactionRepository.findAllById(bankIds).stream()
+        Map<Long, BankTransaction> bankById = bankTransactionRepository.findAllById(bankIds).stream()
+                .collect(Collectors.toMap(BankTransaction::getId, t -> t, (a, b) -> a));
+
+        Map<Long, LocalDate> bankDates = bankById.values().stream()
                 .filter(t -> t.getTransactionDate() != null)
                 .collect(Collectors.toMap(BankTransaction::getId, t -> t.getTransactionDate().toLocalDate(), (a, b) -> a));
 
         Map<Long, LocalDate> operatorDates = new HashMap<>();
+        Map<Long, Boolean> operatorSuccessById = new HashMap<>();
+        Map<Long, BigDecimal> operatorAmountById = new HashMap<>();
         if (channel == OperatorType.MOOV) {
-            operatorDates.putAll(moovTransactionRepository.findAllById(operatorIds).stream()
+            List<MoovTransaction> moovTransactions = moovTransactionRepository.findAllById(operatorIds);
+            operatorDates.putAll(moovTransactions.stream()
                     .map(t -> Map.entry(t.getId(), t.getCompletionTime() != null ? t.getCompletionTime().toLocalDate() :
                             (t.getInitiationTime() != null ? t.getInitiationTime().toLocalDate() : null)))
                     .filter(e -> e.getValue() != null)
                     .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (a, b) -> a)));
+            operatorSuccessById.putAll(moovTransactions.stream()
+                    .collect(Collectors.toMap(MoovTransaction::getId, t -> t.getTransactionStatusNormalized() == NormalizedMoovStatus.SUCCESS_MOOV, (a, b) -> a)));
+            operatorAmountById.putAll(moovTransactions.stream()
+                    .filter(t -> t.getAmount() != null)
+                    .collect(Collectors.toMap(MoovTransaction::getId, MoovTransaction::getAmount, (a, b) -> a)));
         } else {
-            operatorDates.putAll(orangeTransactionRepository.findAllById(operatorIds).stream()
+            List<OrangeTransaction> orangeTransactions = orangeTransactionRepository.findAllById(operatorIds);
+            operatorDates.putAll(orangeTransactions.stream()
                     .filter(t -> t.getTransactionDateTime() != null)
                     .collect(Collectors.toMap(OrangeTransaction::getId, t -> t.getTransactionDateTime().toLocalDate(), (a, b) -> a)));
+            operatorSuccessById.putAll(orangeTransactions.stream()
+                    .collect(Collectors.toMap(OrangeTransaction::getId, t -> t.getTransactionStatusNormalized() == NormalizedOrangeStatus.SUCCESS_ORANGE, (a, b) -> a)));
+            operatorAmountById.putAll(orangeTransactions.stream()
+                    .filter(t -> t.getAmount() != null)
+                    .collect(Collectors.toMap(OrangeTransaction::getId, OrangeTransaction::getAmount, (a, b) -> a)));
         }
 
         List<ReportingRow> enriched = new ArrayList<>();
         for (ReconciliationResult result : results) {
             LocalDate txDate = resolveTransactionDate(result, bankDates, operatorDates);
             if (inRange(txDate, window.from(), window.to())) {
-                enriched.add(new ReportingRow(result, txDate));
+                BankTransaction bank = result.getBankTransactionId() == null ? null : bankById.get(result.getBankTransactionId());
+                boolean bankSuccess = bank != null && bank.getAllocationStatusNormalized() == NormalizedBankStatus.SUCCESS_BANK;
+                boolean operatorSuccess = result.getMoovTransactionId() != null
+                        && Boolean.TRUE.equals(operatorSuccessById.get(result.getMoovTransactionId()));
+                BigDecimal bankAmount = bank != null && bank.getAmount() != null ? bank.getAmount() : result.getBankAmount();
+                BigDecimal operatorAmount = result.getMoovTransactionId() == null
+                        ? result.getMoovAmount()
+                        : operatorAmountById.getOrDefault(result.getMoovTransactionId(), result.getMoovAmount());
+                enriched.add(new ReportingRow(result, txDate, bankSuccess, operatorSuccess, bankAmount, operatorAmount));
             }
         }
         return enriched;
@@ -546,5 +640,12 @@ public class ReportingServiceImpl implements ReportingService {
 
     private record ReportData(List<ReportingRow> rows) {}
 
-    private record ReportingRow(ReconciliationResult result, LocalDate transactionDate) {}
+    private record ReportingRow(
+            ReconciliationResult result,
+            LocalDate transactionDate,
+            boolean bankSuccess,
+            boolean operatorSuccess,
+            BigDecimal bankAmount,
+            BigDecimal operatorAmount
+    ) {}
 }

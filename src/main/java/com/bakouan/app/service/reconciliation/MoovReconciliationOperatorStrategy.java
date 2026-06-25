@@ -1,5 +1,7 @@
 package com.bakouan.app.service.reconciliation;
 
+import com.bakouan.app.enums.OperatorType;
+import com.bakouan.app.enums.ReconciliationReasonCode;
 import com.bakouan.app.enums.ReconciliationResultType;
 import com.bakouan.app.enums.SourceType;
 import com.bakouan.app.model.BankTransaction;
@@ -54,13 +56,13 @@ public class MoovReconciliationOperatorStrategy implements ReconciliationOperato
 
             if (banks.size() > 1) {
                 for (BankTransaction bank : banks) {
-                    resultWriter.save(run, key, bank, moovs.isEmpty() ? null : moovs.get(0), ReconciliationResultType.DOUBLON_BANQUE, "MOOV:Plusieurs lignes banque");
+                    resultWriter.save(run, key, bank, moovs.isEmpty() ? null : moovs.get(0), ReconciliationResultType.DOUBLON_BANQUE, resultWriter.reason(OperatorType.MOOV, ReconciliationReasonCode.DOUBLON_BANQUE));
                 }
                 continue;
             }
             if (moovs.size() > 1) {
                 for (MoovTransaction moov : moovs) {
-                    resultWriter.save(run, key, banks.isEmpty() ? null : banks.get(0), moov, ReconciliationResultType.DOUBLON_MOOV, "MOOV:Plusieurs lignes moov");
+                    resultWriter.save(run, key, banks.isEmpty() ? null : banks.get(0), moov, ReconciliationResultType.DOUBLON_MOOV, resultWriter.reason(OperatorType.MOOV, ReconciliationReasonCode.DOUBLON_OPERATEUR));
                 }
                 continue;
             }
@@ -68,7 +70,23 @@ public class MoovReconciliationOperatorStrategy implements ReconciliationOperato
             BankTransaction bank = banks.isEmpty() ? null : banks.get(0);
             MoovTransaction moov = moovs.isEmpty() ? null : moovs.get(0);
             ReconciliationResultType type = classificationService.classify(bank, moov);
-            resultWriter.save(run, key, bank, moov, type, "MOOV:" + type.name());
+            resultWriter.save(run, key, bank, moov, type, resultWriter.reason(OperatorType.MOOV, reasonCode(type)));
         }
+    }
+
+    private ReconciliationReasonCode reasonCode(ReconciliationResultType type) {
+        return switch (type) {
+            case MATCH_OK -> ReconciliationReasonCode.MATCH_OK;
+            case DEBIT_A_TORT -> ReconciliationReasonCode.DEBIT_A_TORT;
+            case CREDIT_SANS_DEBIT -> ReconciliationReasonCode.CREDIT_SANS_DEBIT;
+            case ECHEC_DES_DEUX_COTES -> ReconciliationReasonCode.ECHEC_DES_DEUX_COTES;
+            case ABSENT_COTE_BANQUE -> ReconciliationReasonCode.ABSENT_COTE_BANQUE;
+            case ABSENT_COTE_MOOV, ABSENT_COTE_ORANGE -> ReconciliationReasonCode.ABSENT_COTE_OPERATEUR;
+            case OPERATEUR_NON_ABOUTI_SANS_BANQUE -> ReconciliationReasonCode.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
+            case MONTANT_DIFFERENT -> ReconciliationReasonCode.MONTANT_DIFFERENT;
+            case DOUBLON_BANQUE -> ReconciliationReasonCode.DOUBLON_BANQUE;
+            case DOUBLON_MOOV -> ReconciliationReasonCode.DOUBLON_OPERATEUR;
+            case STATUT_INCONNU -> ReconciliationReasonCode.STATUT_INCONNU;
+        };
     }
 }

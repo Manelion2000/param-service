@@ -17,9 +17,18 @@ public interface FileImportService {
     FileImport importFile(SourceType sourceType, OperatorType operatorScope, LocalDate businessDate, MultipartFile file);
     Page<FileImport> list(Pageable pageable);
     FileImport get(Long id);
-    ImportDeletionResult deleteLatestImport(SourceType sourceType);
-    ImportBulkDeletionResult deleteImportsBySourceAndBusinessDate(SourceType sourceType, OperatorType operatorScope, LocalDate businessDate);
-    ImportFullDeletionResult deleteAllImportsBySource(SourceType sourceType, OperatorType operatorScope);
+    ImportDeletionResult deleteLatestImport(SourceType sourceType, boolean confirmCascade);
+    ImportBulkDeletionResult deleteImportsBySourceAndBusinessDate(
+            SourceType sourceType,
+            OperatorType operatorScope,
+            LocalDate businessDate,
+            boolean confirmCascade
+    );
+    ImportFullDeletionResult deleteAllImportsBySource(
+            SourceType sourceType,
+            OperatorType operatorScope,
+            boolean confirmCascade
+    );
     ImportDeletionPreviewResult previewDeletionBySourceAndBusinessDate(SourceType sourceType, OperatorType operatorScope, LocalDate businessDate);
 }
 

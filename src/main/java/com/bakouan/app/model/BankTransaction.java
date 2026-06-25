@@ -30,6 +30,7 @@ public class BankTransaction {
     private String transactionId;
 
     private String allocationStatusRaw;
+    private String rejectReasonRaw;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 24)
@@ -40,6 +41,7 @@ public class BankTransaction {
     private String accountNumber;
     private String phoneNumber;
     private String operationReference;
+    private String operationNature;
 
     @Column(precision = 19, scale = 2)
     private BigDecimal amount;

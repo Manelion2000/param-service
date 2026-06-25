@@ -4,15 +4,21 @@ import com.bakouan.app.dto.ReconciliationRunRequest;
 import com.bakouan.app.dto.ReconciliationSummaryDto;
 import com.bakouan.app.enums.OperatorType;
 import com.bakouan.app.enums.ReconciliationResultType;
+import com.bakouan.app.model.BankTransaction;
 import com.bakouan.app.model.ReconciliationResult;
 import com.bakouan.app.model.ReconciliationRun;
 import com.bakouan.app.service.ReconciliationService;
 import com.bakouan.app.repositories.ReconciliationResultRepository;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,6 +30,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -124,6 +131,9 @@ public class ReconciliationController {
             @RequestParam(required = false) ReconciliationResultType type,
             @RequestParam(required = false) OperatorType operator,
             @RequestParam(required = false) String operationReference,
+            @RequestParam(required = false) String phoneNumber,
+            @RequestParam(required = false) String accountNumber,
+            @RequestParam(required = false) String transactionKey,
             Pageable pageable) {
         LocalDate parsedFrom = parseDateParam(dateFrom, "dateFrom");
         LocalDate parsedTo = parseDateParam(dateTo, "dateTo");
@@ -131,24 +141,35 @@ public class ReconciliationController {
 
         LocalDate from = parsedSingleDay != null ? parsedSingleDay : parsedFrom;
         LocalDate to = parsedSingleDay != null ? parsedSingleDay : parsedTo;
-        if (operationReference == null || operationReference.isBlank()) {
+        boolean hasAdvancedFilter = hasText(operationReference) || hasText(phoneNumber)
+                || hasText(accountNumber) || hasText(transactionKey);
+        if (!hasAdvancedFilter) {
             return reconciliationService.globalResults(from, to, type, operator, pageable);
         }
-        String opRef = operationReference.trim();
+        String opRef = trimToNull(operationReference);
+        String phone = trimToNull(phoneNumber);
+        String account = trimToNull(accountNumber);
+        String key = trimToNull(transactionKey);
         return reconciliationResultRepository.findAll((root, query, cb) -> {
             var predicates = new java.util.ArrayList<jakarta.persistence.criteria.Predicate>();
             if (from != null) predicates.add(cb.greaterThanOrEqualTo(root.get("businessDate"), from));
             if (to != null) predicates.add(cb.lessThanOrEqualTo(root.get("businessDate"), to));
             if (type != null) predicates.add(cb.equal(root.get("resultType"), type));
             if (operator != null) predicates.add(cb.equal(root.get("run").get("operator"), operator));
-            var bankSub = query.subquery(Long.class);
-            var bankRoot = bankSub.from(com.bakouan.app.model.BankTransaction.class);
-            bankSub.select(bankRoot.get("id"))
-                    .where(
-                            cb.equal(bankRoot.get("id"), root.get("bankTransactionId")),
-                            cb.equal(bankRoot.get("operationReference"), opRef)
-                    );
-            predicates.add(cb.exists(bankSub));
+            if (key != null) {
+                predicates.add(cb.like(cb.lower(root.get("transactionKey")), "%" + key.toLowerCase(Locale.ROOT) + "%"));
+            }
+            if (opRef != null || phone != null || account != null) {
+                var bankSub = query.subquery(Long.class);
+                var bankRoot = bankSub.from(BankTransaction.class);
+                var bankPredicates = new java.util.ArrayList<jakarta.persistence.criteria.Predicate>();
+                bankPredicates.add(cb.equal(bankRoot.get("id"), root.get("bankTransactionId")));
+                if (opRef != null) bankPredicates.add(cb.equal(bankRoot.get("operationReference"), opRef));
+                if (phone != null) bankPredicates.add(cb.like(cb.lower(bankRoot.get("phoneNumber")), "%" + phone.toLowerCase(Locale.ROOT) + "%"));
+                if (account != null) bankPredicates.add(cb.like(cb.lower(bankRoot.get("accountNumber")), "%" + account.toLowerCase(Locale.ROOT) + "%"));
+                bankSub.select(bankRoot.get("id")).where(bankPredicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
+                predicates.add(cb.exists(bankSub));
+            }
             return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
         }, pageable);
     }
@@ -186,6 +207,11 @@ public class ReconciliationController {
     @GetMapping("/runs/{id}/absents-orange")
     public Page<ReconciliationResult> absentOrange(@PathVariable Long id, Pageable pageable) {
         return reconciliationService.resultsByType(id, ReconciliationResultType.ABSENT_COTE_ORANGE, pageable);
+    }
+
+    @GetMapping("/runs/{id}/operateur-non-abouti-sans-banque")
+    public Page<ReconciliationResult> operatorNotCompletedWithoutBank(@PathVariable Long id, Pageable pageable) {
+        return reconciliationService.resultsByType(id, ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE, pageable);
     }
 
     @GetMapping("/runs/{id}/doublons")
@@ -234,8 +260,56 @@ public class ReconciliationController {
     }
 
     @GetMapping("/runs/{id}/export/xlsx")
-    public ResponseEntity<String> exportXlsx(@PathVariable Long id) {
-        return ResponseEntity.ok("Export XLSX endpoint pret a etre connecte au generateur Apache POI.");
+    public ResponseEntity<byte[]> exportXlsx(@PathVariable Long id) {
+        List<ReconciliationResult> rows = reconciliationService.results(id, Pageable.unpaged()).getContent();
+        try (Workbook workbook = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            Sheet sheet = workbook.createSheet("reconciliation");
+            Row header = sheet.createRow(0);
+            String[] headers = {
+                    "transactionKey", "resultType", "businessDate", "bankTransactionId", "operatorTransactionId",
+                    "bankStatus", "operatorStatus", "bankAmount", "operatorAmount", "amountDifference", "reason"
+            };
+            for (int i = 0; i < headers.length; i++) {
+                header.createCell(i).setCellValue(headers[i]);
+            }
+            int rowIndex = 1;
+            for (ReconciliationResult result : rows) {
+                Row row = sheet.createRow(rowIndex++);
+                row.createCell(0).setCellValue(nullToEmpty(result.getTransactionKey()));
+                row.createCell(1).setCellValue(result.getResultType() == null ? "" : result.getResultType().name());
+                row.createCell(2).setCellValue(result.getBusinessDate() == null ? "" : result.getBusinessDate().toString());
+                row.createCell(3).setCellValue(result.getBankTransactionId() == null ? "" : result.getBankTransactionId().toString());
+                row.createCell(4).setCellValue(result.getMoovTransactionId() == null ? "" : result.getMoovTransactionId().toString());
+                row.createCell(5).setCellValue(nullToEmpty(result.getBankStatusRaw()));
+                row.createCell(6).setCellValue(nullToEmpty(result.getMoovStatusRaw()));
+                row.createCell(7).setCellValue(result.getBankAmount() == null ? "" : result.getBankAmount().toPlainString());
+                row.createCell(8).setCellValue(result.getMoovAmount() == null ? "" : result.getMoovAmount().toPlainString());
+                row.createCell(9).setCellValue(result.getAmountDifference() == null ? "" : result.getAmountDifference().toPlainString());
+                row.createCell(10).setCellValue(nullToEmpty(result.getReason()));
+            }
+            for (int i = 0; i < headers.length; i++) {
+                sheet.autoSizeColumn(i);
+            }
+            workbook.write(out);
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"reconciliation-run-" + id + ".xlsx\"")
+                    .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                    .body(out.toByteArray());
+        } catch (Exception e) {
+            throw new IllegalStateException("Impossible de generer l'export XLSX", e);
+        }
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private String trimToNull(String value) {
+        return hasText(value) ? value.trim() : null;
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     private LocalDate parseDateParam(String value, String paramName) {
