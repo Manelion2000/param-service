@@ -1,0 +1,15 @@
+.git
+.idea
+.agents
+.ai
+.codex
+target
+datas
+docs
+image
+reports
+readMe
+*.log
+*.tmp
+Dockerfile
+docker-compose*.yml
