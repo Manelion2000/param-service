@@ -19,6 +19,7 @@ public record AccountingCheckRowDto(
         String pieceNumber,
         String eventNumber,
         String phoneNumber,
+        String operationNature,
         AccountingStatus status
 ) {
 }

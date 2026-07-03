@@ -329,19 +329,11 @@ public class ReportingServiceImpl implements ReportingService {
 
     private ReportingTransactionDetailDto toDetail(ReportingRow row, OperatorType channel) {
         ReconciliationResult r = row.result();
-        String direction;
-        if (r.getBankTransactionId() != null && r.getMoovTransactionId() == null) {
-            direction = "BANQUE -> " + channel;
-        } else if (r.getBankTransactionId() == null && r.getMoovTransactionId() != null) {
-            direction = channel + " -> BANQUE";
-        } else {
-            direction = "BANQUE <-> " + channel;
-        }
         return new ReportingTransactionDetailDto(
                 row.transactionDate(),
                 r.getTransactionKey(),
                 toViewType(row, channel),
-                direction,
+                directionLabel(row, channel),
                 r.getBankStatusRaw(),
                 r.getMoovStatusRaw(),
                 r.getBankAmount(),
@@ -349,6 +341,23 @@ public class ReportingServiceImpl implements ReportingService {
                 r.getAmountDifference(),
                 r.getReason()
         );
+    }
+
+    private String directionLabel(ReportingRow row, OperatorType channel) {
+        if ("BANK_TO_WALLET".equals(row.operationType())) {
+            return "BANQUE -> " + channel;
+        }
+        if ("WALLET_TO_BANK".equals(row.operationType())) {
+            return channel + " -> BANQUE";
+        }
+        ReconciliationResult r = row.result();
+        if (r.getBankTransactionId() != null && r.getMoovTransactionId() == null) {
+            return "BANQUE -> " + channel;
+        }
+        if (r.getBankTransactionId() == null && r.getMoovTransactionId() != null) {
+            return channel + " -> BANQUE";
+        }
+        return "BANQUE <-> " + channel;
     }
 
     private void buildSummarySheet(Sheet sheet, ReportingSummaryDto summary) {
@@ -544,10 +553,18 @@ public class ReportingServiceImpl implements ReportingService {
         Map<Long, LocalDate> bankDates = bankById.values().stream()
                 .filter(t -> t.getTransactionDate() != null)
                 .collect(Collectors.toMap(BankTransaction::getId, t -> t.getTransactionDate().toLocalDate(), (a, b) -> a));
+        Map<Long, String> bankOperationTypes = new HashMap<>();
+        for (BankTransaction transaction : bankById.values()) {
+            String operationType = normalizeOperationType(String.valueOf(transaction.getOperationNature()));
+            if (operationType != null) {
+                bankOperationTypes.put(transaction.getId(), operationType);
+            }
+        }
 
         Map<Long, LocalDate> operatorDates = new HashMap<>();
         Map<Long, Boolean> operatorSuccessById = new HashMap<>();
         Map<Long, BigDecimal> operatorAmountById = new HashMap<>();
+        Map<Long, String> operatorOperationTypes = new HashMap<>();
         if (channel == OperatorType.MOOV) {
             List<MoovTransaction> moovTransactions = moovTransactionRepository.findAllById(operatorIds);
             operatorDates.putAll(moovTransactions.stream()
@@ -560,6 +577,12 @@ public class ReportingServiceImpl implements ReportingService {
             operatorAmountById.putAll(moovTransactions.stream()
                     .filter(t -> t.getAmount() != null)
                     .collect(Collectors.toMap(MoovTransaction::getId, MoovTransaction::getAmount, (a, b) -> a)));
+            for (MoovTransaction transaction : moovTransactions) {
+                String operationType = normalizeOperationType(String.valueOf(transaction.getTransactionType()));
+                if (operationType != null) {
+                    operatorOperationTypes.put(transaction.getId(), operationType);
+                }
+            }
         } else {
             List<OrangeTransaction> orangeTransactions = orangeTransactionRepository.findAllById(operatorIds);
             operatorDates.putAll(orangeTransactions.stream()
@@ -584,10 +607,49 @@ public class ReportingServiceImpl implements ReportingService {
                 BigDecimal operatorAmount = result.getMoovTransactionId() == null
                         ? result.getMoovAmount()
                         : operatorAmountById.getOrDefault(result.getMoovTransactionId(), result.getMoovAmount());
-                enriched.add(new ReportingRow(result, txDate, bankSuccess, operatorSuccess, bankAmount, operatorAmount));
+                String operationType = resolveOperationType(result, bankOperationTypes, operatorOperationTypes);
+                enriched.add(new ReportingRow(result, txDate, bankSuccess, operatorSuccess, bankAmount, operatorAmount, operationType));
             }
         }
         return enriched;
+    }
+
+    private String resolveOperationType(ReconciliationResult result,
+                                        Map<Long, String> bankOperationTypes,
+                                        Map<Long, String> operatorOperationTypes) {
+        if (result.getMoovTransactionId() != null) {
+            String operatorType = operatorOperationTypes.get(result.getMoovTransactionId());
+            if (operatorType != null) {
+                return operatorType;
+            }
+        }
+        if (result.getBankTransactionId() != null) {
+            String bankType = bankOperationTypes.get(result.getBankTransactionId());
+            if (bankType != null) {
+                return bankType;
+            }
+        }
+        if (result.getBankTransactionId() != null && result.getMoovTransactionId() == null) {
+            return "BANK_TO_WALLET";
+        }
+        if (result.getBankTransactionId() == null && result.getMoovTransactionId() != null) {
+            return "WALLET_TO_BANK";
+        }
+        return null;
+    }
+
+    private String normalizeOperationType(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String value = raw.trim().toUpperCase(Locale.ROOT);
+        if (value.equals("BANK_TO_WALLET") || value.equals("BANK_TO_MOOV")) {
+            return "BANK_TO_WALLET";
+        }
+        if (value.equals("WALLET_TO_BANK") || value.equals("MOOV_TO_BANK")) {
+            return "WALLET_TO_BANK";
+        }
+        return null;
     }
 
     private LocalDate resolveTransactionDate(ReconciliationResult result, Map<Long, LocalDate> bankDates, Map<Long, LocalDate> operatorDates) {
@@ -646,6 +708,7 @@ public class ReportingServiceImpl implements ReportingService {
             boolean bankSuccess,
             boolean operatorSuccess,
             BigDecimal bankAmount,
-            BigDecimal operatorAmount
+            BigDecimal operatorAmount,
+            String operationType
     ) {}
 }

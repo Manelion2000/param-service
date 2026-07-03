@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -44,13 +45,19 @@ public class AccountingServiceImpl implements AccountingService {
         LocalDateTime bankTo = dateTo.plusDays(1).atStartOfDay();
         List<BankTransaction> banks = accountingCandidateBanks(bankFrom, bankTo, operator);
         List<AmplitudeTransaction> amplitudes = amplitudeTransactionRepository.findAll();
+        List<AmplitudeTransaction> periodAmplitudes = amplitudeTransactionRepository
+                .findByOperationDateGreaterThanEqualAndOperationDateLessThan(bankFrom, bankTo);
         Map<String, List<AmplitudeTransaction>> amplitudeByRef = groupAmplitudeByReference(amplitudes);
 
         List<AccountingCheckRowDto> out = new ArrayList<>();
+        Set<Long> matchedAmplitudeIds = new java.util.HashSet<>();
         for (BankTransaction bank : banks) {
             AmplitudeTransaction matched = findMatchedAmplitude(bank, amplitudeByRef, amplitudes);
             if (isGeneratedPayment(bank) && matched == null) {
                 continue;
+            }
+            if (matched != null && matched.getId() != null) {
+                matchedAmplitudeIds.add(matched.getId());
             }
             AccountingStatus status = matched == null ? AccountingStatus.NON_COMPTABILISE : AccountingStatus.COMPTABILISE;
             out.add(new AccountingCheckRowDto(
@@ -67,7 +74,30 @@ public class AccountingServiceImpl implements AccountingService {
                     matched == null ? null : matched.getPieceNumber(),
                     matched == null ? null : matched.getEventNumber(),
                     matched == null ? null : matched.getPhoneNumber(),
+                    normalizeOperationNature(bank.getOperationNature()),
                     status
+            ));
+        }
+        for (AmplitudeTransaction amplitude : periodAmplitudes) {
+            if (amplitude.getId() != null && matchedAmplitudeIds.contains(amplitude.getId())) {
+                continue;
+            }
+            out.add(new AccountingCheckRowDto(
+                    null,
+                    null,
+                    amplitude.getOperationDate() == null ? null : amplitude.getOperationDate().toLocalDate(),
+                    null,
+                    amplitude.getAmount(),
+                    amplitude.getAccountNumber(),
+                    null,
+                    amplitude.getOperationReference(),
+                    amplitude.getAccountingDateRaw(),
+                    amplitude.getValueDateRaw(),
+                    amplitude.getPieceNumber(),
+                    amplitude.getEventNumber(),
+                    amplitude.getPhoneNumber(),
+                    normalizeOperationNature(amplitude.getDirection()),
+                    AccountingStatus.AMPLITUDE_SANS_CARTHAGO
             ));
         }
         return out;
@@ -218,6 +248,26 @@ public class AccountingServiceImpl implements AccountingService {
         if (value == null) return null;
         String v = value.replaceAll("\\D", "");
         return v.isBlank() ? null : v;
+    }
+
+    private String normalizeOperationNature(String value) {
+        if (value == null || value.isBlank()) return null;
+        String normalized = Normalizer.normalize(value, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .trim()
+                .toUpperCase(Locale.ROOT)
+                .replace('-', '_')
+                .replace(' ', '_');
+        if (normalized.contains("BANK_TO_WALLET") || normalized.contains("BANK_TO_MOOV")
+                || normalized.contains("BANQUE_TO_WALLET") || normalized.contains("BANQUE_VERS_WALLET")
+                || normalized.contains("BANQUE_WALLET")) {
+            return "BANK_TO_WALLET";
+        }
+        if (normalized.contains("WALLET_TO_BANK") || normalized.contains("MOOV_TO_BANK")
+                || normalized.contains("WALLET_VERS_BANQUE") || normalized.contains("WALLET_BANQUE")) {
+            return "WALLET_TO_BANK";
+        }
+        return normalized;
     }
 
     private BigDecimal rate(long numerator, long denominator) {
