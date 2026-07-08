@@ -26,6 +26,9 @@ public class ReconciliationClassificationService {
     }
 
     public ReconciliationResultType classify(BankTransaction bank, MoovTransaction moov) {
+        if (isMoovApprovisionnement(moov)) {
+            return ReconciliationResultType.APPROVISIONNEMENT;
+        }
         if (bank == null && moov != null) {
             if (moov.getTransactionStatusNormalized() == NormalizedMoovStatus.SUCCESS_MOOV) {
                 return ReconciliationResultType.ABSENT_COTE_BANQUE;
@@ -76,7 +79,22 @@ public class ReconciliationClassificationService {
         return ReconciliationResultType.STATUT_INCONNU;
     }
 
+    public boolean isMoovApprovisionnement(MoovTransaction moov) {
+        if (moov == null) {
+            return false;
+        }
+        String type = moov.getTransactionType() == null ? "" : moov.getTransactionType().trim().toUpperCase();
+        if (!type.equals("WALLET_TO_BANK") && !type.equals("MOOV_TO_BANK")) {
+            return false;
+        }
+        String digits = moov.getMsisdn() == null ? "" : moov.getMsisdn().replaceAll("\\D", "");
+        return digits.length() > 12;
+    }
+
     public ReconciliationResultType classify(BankTransaction bank, OrangeTransaction orange) {
+        if (isOrangeApprovisionnement(orange)) {
+            return ReconciliationResultType.APPROVISIONNEMENT;
+        }
         if (bank == null && orange != null) {
             if (orange.getTransactionStatusNormalized() == NormalizedOrangeStatus.SUCCESS_ORANGE) {
                 return ReconciliationResultType.ABSENT_COTE_BANQUE;
@@ -121,6 +139,14 @@ public class ReconciliationClassificationService {
             return ReconciliationResultType.ECHEC_DES_DEUX_COTES;
         }
         return ReconciliationResultType.STATUT_INCONNU;
+    }
+
+    public boolean isOrangeApprovisionnement(OrangeTransaction orange) {
+        if (orange == null) {
+            return false;
+        }
+        String digits = orange.getSenderMobileNumber() == null ? "" : orange.getSenderMobileNumber().replaceAll("\\D", "");
+        return digits.length() > 12;
     }
 
     private boolean isGeneratedAndAccountedInAmplitude(BankTransaction bank) {

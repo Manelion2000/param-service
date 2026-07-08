@@ -96,7 +96,7 @@ public class BaUserService {
 
         BaUser user = this.mapper.maps(uDto);
         user.setId(BaUtils.randomUUID());
-        String userPassword="1234";
+        String userPassword = uDto.getCredentials().getPassword();
         user.setPassword(this.passwordEncoder.encode(userPassword));
         user.setResetKey(null);
         user.setResetDate(null);
@@ -106,8 +106,70 @@ public class BaUserService {
         BaUser save = this.userRepository.save(user);
 
         mailService.sendMessage(user.getEmail(), user.getNom() + " " + user.getPrenom(), "Merci " +
-                " d'être immatriculé. Votre code est : "+userPassword,"Identifiant  de connexion");
+                " d'être immatriculé. Votre compte est actif.","Identifiant  de connexion");
         return this.mapper.maps(save);
+    }
+
+    public BaUserDto register(final BaRegisterDto registerDto) {
+        log.info("Auto-inscription utilisateur: {}", registerDto.getEmail());
+        if (!Objects.equals(registerDto.getPassword(), registerDto.getConfirmation())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "La confirmation ne correspond pas au mot de passe.");
+        }
+        String email = registerDto.getEmail().trim().toLowerCase();
+        if (this.userRepository.existsByUsernameIgnoreCase(email)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cet email est deja utilise comme identifiant.");
+        }
+        if (this.userRepository.existsByEmailIgnoreCase(email)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "L'email est deja utilise.");
+        }
+
+        BaUser user = new BaUser();
+        user.setId(BaUtils.randomUUID());
+        user.setUsername(email);
+        user.setEmail(email);
+        user.setNom(registerDto.getNom());
+        user.setPrenom(registerDto.getPrenom());
+        user.setPassword(this.passwordEncoder.encode(registerDto.getPassword()));
+        user.setTelephone(email);
+        user.setLocked(Boolean.FALSE);
+        user.setActivated(Boolean.TRUE);
+        user.setProfil(resolveDefaultSelfRegistrationProfile());
+        return this.mapper.maps(this.userRepository.save(user));
+    }
+
+    private BaProfil resolveDefaultSelfRegistrationProfile() {
+        BaRole connectRole = roleRepository.findAll().stream()
+                .filter(role -> BaRolesConstants.BA_CONNECT.equals(role.getCode()))
+                .findFirst()
+                .orElseGet(() -> {
+                    BaRole role = new BaRole();
+                    role.setId(BaUtils.randomUUID());
+                    role.setCode(BaRolesConstants.BA_CONNECT);
+                    role.setLibelle("Utilisateur connecte");
+                    return roleRepository.save(role);
+                });
+        Optional<BaProfil> existingProfile = profilRepository.findByStatutOrderByCreatedDateDesc(EStatut.A).stream()
+                .filter(profil -> "AUTO_INSCRIPTION".equalsIgnoreCase(profil.getLibelle()))
+                .findFirst();
+        if (existingProfile.isPresent()) {
+            BaProfil profil = existingProfile.get();
+            if (profil.getRoles().stream().noneMatch(role -> BaRolesConstants.BA_CONNECT.equals(role.getCode()))) {
+                profil.getRoles().add(connectRole);
+                return profilRepository.save(profil);
+            }
+            return profil;
+        }
+        return profilRepository.save(createSelfRegistrationProfile(connectRole));
+    }
+
+    private BaProfil createSelfRegistrationProfile(BaRole connectRole) {
+                    BaProfil profil = new BaProfil();
+                    profil.setId(BaUtils.randomUUID());
+                    profil.setLibelle("AUTO_INSCRIPTION");
+                    profil.setDescription("Profil par defaut des comptes crees depuis le formulaire public");
+                    profil.getRoles().add(connectRole);
+                    return profil;
     }
 
 

@@ -386,6 +386,7 @@ public class DashboardServiceImpl implements DashboardService {
             case ABSENT_COTE_BANQUE -> DashboardResultTypeView.ABSENT_COTE_BANQUE;
             case ABSENT_COTE_MOOV, ABSENT_COTE_ORANGE -> DashboardResultTypeView.ABSENT_COTE_OPERATEUR;
             case OPERATEUR_NON_ABOUTI_SANS_BANQUE -> DashboardResultTypeView.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
+            case APPROVISIONNEMENT -> DashboardResultTypeView.APPROVISIONNEMENT;
             case MONTANT_DIFFERENT -> DashboardResultTypeView.MONTANT_DIFFERENT;
             case STATUT_INCONNU -> DashboardResultTypeView.STATUT_INCONNU;
             case DOUBLON_BANQUE, DOUBLON_MOOV -> DashboardResultTypeView.DOUBLONS;
@@ -411,7 +412,8 @@ public class DashboardServiceImpl implements DashboardService {
     }
 
     private boolean isFinanciallyRelevant(ReconciliationResult row) {
-        return row.getResultType() != ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
+        return row.getResultType() != ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE
+                && row.getResultType() != ReconciliationResultType.APPROVISIONNEMENT;
     }
 
     private boolean isCompletedOnBothSides(ReconciliationResult row) {

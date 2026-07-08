@@ -4,6 +4,7 @@ package com.bakouan.app.config;
 import com.bakouan.app.security.BaRolesConstants;
 import com.bakouan.app.security.BaUserDetailsService;
 import com.bakouan.app.security.jwt.JWTConfigurer;
+import com.bakouan.app.security.jwt.JWTFilter;
 import com.bakouan.app.security.jwt.TokenProvider;
 import com.bakouan.app.utils.BaConstants;
 import jakarta.annotation.PostConstruct;
@@ -29,8 +30,11 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CorsFilter;
+
+import java.util.List;
 
 @Profile("prod")
 @RequiredArgsConstructor
@@ -120,6 +124,7 @@ public class SecurityConfigForProd {
                     .requestMatchers(BaConstants.URL.BASE_URL + BaConstants.URL.USER + "/{id}/activate").permitAll()
                     .requestMatchers(BaConstants.URL.BASE_URL + BaConstants.URL.USER).permitAll()
                     .requestMatchers(BaConstants.URL.BASE_URL + BaConstants.URL.AUTHENTICATE).permitAll()
+                    .requestMatchers(BaConstants.URL.BASE_URL + "/register").permitAll()
                     .requestMatchers(HttpMethod.GET, BaConstants.URL.CSRF_TOKEN).permitAll()
                     .requestMatchers(BaConstants.URL.BASE_URL + "/reset/**").permitAll()
                     .requestMatchers(HttpMethod.GET, BaConstants.URL.BASE_URL + BaConstants.URL.CATEGORIE).permitAll()
@@ -144,6 +149,14 @@ public class SecurityConfigForProd {
     @Bean
     public CorsFilter corsFilter() {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(List.of("http://localhost:4200", "http://127.0.0.1:4200"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"));
+        config.setExposedHeaders(List.of(JWTFilter.AUTHORIZATION_HEADER));
+        config.setAllowCredentials(false);
+        config.setMaxAge(3600L);
+        source.registerCorsConfiguration("/api/**", config);
         return new CorsFilter(source);
     }
 

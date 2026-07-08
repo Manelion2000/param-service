@@ -223,7 +223,8 @@ public class ReconciliationServiceImpl implements ReconciliationService {
     }
 
     private boolean isFinanciallyRelevant(ReconciliationResult row) {
-        return row.getResultType() != ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
+        return row.getResultType() != ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE
+                && row.getResultType() != ReconciliationResultType.APPROVISIONNEMENT;
     }
 
     private Specification<ReconciliationResult> globalSpec(LocalDate dateFrom, LocalDate dateTo, ReconciliationResultType type, OperatorType operator) {

@@ -8,6 +8,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 
 import java.util.Optional;
+import com.bakouan.app.utils.BaConstants;
 
 @Slf4j
 @RequiredArgsConstructor
@@ -41,8 +42,11 @@ public class BaAuditorAwareImpl implements AuditorAware<String> {
      */
     @Override
     public Optional<String> getCurrentAuditor() {
-        log.debug("--== Recuperation du username = {} --==", udf.getUserDetails().getUsername());
-        return Optional.of(udf.getUserDetails().getUsername());
+        String username = Optional.ofNullable(udf.getUserDetails())
+                .map(UserDetails::getUsername)
+                .orElseGet(() -> getCurrentUserLogin().orElse(BaConstants.DEFAULT_USER));
+        log.debug("--== Recuperation du username = {} --==", username);
+        return Optional.of(username);
     }
 
 }

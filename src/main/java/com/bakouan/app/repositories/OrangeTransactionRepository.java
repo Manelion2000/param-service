@@ -33,6 +33,10 @@ public interface OrangeTransactionRepository extends JpaRepository<OrangeTransac
             where o.transactionStatusNormalized = com.bakouan.app.enums.NormalizedOrangeStatus.SUCCESS_ORANGE
               and o.transactionDateTime >= :from
               and o.transactionDateTime < :to
+              and (
+                o.senderMobileNumber is null
+                or length(o.senderMobileNumber) <= 12
+              )
             """)
     BigDecimal sumSuccessAmountByTransactionDateRange(@Param("from") LocalDateTime from,
                                                       @Param("to") LocalDateTime to);
@@ -43,6 +47,10 @@ public interface OrangeTransactionRepository extends JpaRepository<OrangeTransac
             where o.transactionStatusNormalized = com.bakouan.app.enums.NormalizedOrangeStatus.SUCCESS_ORANGE
               and o.transactionDateTime >= :from
               and o.transactionDateTime < :to
+              and (
+                o.senderMobileNumber is null
+                or length(o.senderMobileNumber) <= 12
+              )
             """)
     long countSuccessByTransactionDateRange(@Param("from") LocalDateTime from,
                                             @Param("to") LocalDateTime to);

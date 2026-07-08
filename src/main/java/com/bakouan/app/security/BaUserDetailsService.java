@@ -90,9 +90,11 @@ public class BaUserDetailsService implements UserDetailsService {
             Optional<BaUser> userFromDatabase = this.userRepository
                     .findOneByUsernameIgnoreCaseAndStatut(username, EStatut.A);
             return userFromDatabase.map(user -> {
-                List<GrantedAuthority> ga = user.getProfil().getRoles().stream()
-                        .map(authority -> new SimpleGrantedAuthority(authority.getCode()))
-                        .collect(Collectors.toList());
+                List<GrantedAuthority> ga = user.getProfil() == null
+                        ? List.of(new SimpleGrantedAuthority(BaRolesConstants.BA_CONNECT))
+                        : user.getProfil().getRoles().stream()
+                                .map(authority -> new SimpleGrantedAuthority(authority.getCode()))
+                                .collect(Collectors.toList());
 
                 if (!Boolean.TRUE.equals(user.getActivated())) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Votre compte n'a pas été activé.");

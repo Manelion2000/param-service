@@ -58,6 +58,12 @@ public class OrangeReconciliationOperatorStrategy implements ReconciliationOpera
             List<BankTransaction> banks = bankByKey.getOrDefault(key, List.of());
             List<OrangeTransaction> oranges = orangeByKey.getOrDefault(key, List.of());
 
+            if (!oranges.isEmpty() && oranges.stream().allMatch(classificationService::isOrangeApprovisionnement)) {
+                for (OrangeTransaction orange : oranges) {
+                    resultWriter.save(run, key, banks.isEmpty() ? null : banks.get(0), orange, ReconciliationResultType.APPROVISIONNEMENT, resultWriter.reason(OperatorType.ORANGE, ReconciliationReasonCode.APPROVISIONNEMENT));
+                }
+                continue;
+            }
             if (banks.size() > 1) {
                 for (BankTransaction bank : banks) {
                     resultWriter.save(run, key, bank, oranges.isEmpty() ? null : oranges.get(0), ReconciliationResultType.DOUBLON_BANQUE, resultWriter.reason(OperatorType.ORANGE, ReconciliationReasonCode.DOUBLON_BANQUE));
@@ -87,6 +93,7 @@ public class OrangeReconciliationOperatorStrategy implements ReconciliationOpera
             case ABSENT_COTE_BANQUE -> ReconciliationReasonCode.ABSENT_COTE_BANQUE;
             case ABSENT_COTE_MOOV, ABSENT_COTE_ORANGE -> ReconciliationReasonCode.ABSENT_COTE_OPERATEUR;
             case OPERATEUR_NON_ABOUTI_SANS_BANQUE -> ReconciliationReasonCode.OPERATEUR_NON_ABOUTI_SANS_BANQUE;
+            case APPROVISIONNEMENT -> ReconciliationReasonCode.APPROVISIONNEMENT;
             case MONTANT_DIFFERENT -> ReconciliationReasonCode.MONTANT_DIFFERENT;
             case DOUBLON_BANQUE -> ReconciliationReasonCode.DOUBLON_BANQUE;
             case DOUBLON_MOOV -> ReconciliationReasonCode.DOUBLON_OPERATEUR;

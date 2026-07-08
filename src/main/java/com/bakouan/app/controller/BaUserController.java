@@ -4,6 +4,7 @@ package com.bakouan.app.controller;
 import com.bakouan.app.dto.BaJWTTokenDto;
 import com.bakouan.app.dto.BaLoginDto;
 import com.bakouan.app.dto.BaProfilDto;
+import com.bakouan.app.dto.BaRegisterDto;
 import com.bakouan.app.dto.BaRoleDto;
 import com.bakouan.app.dto.BaUpdatePasswordDto;
 import com.bakouan.app.dto.BaUserDto;
@@ -97,6 +98,11 @@ public class BaUserController {
     public ResponseEntity<Void> postUser(final @Valid @RequestBody BaUserDto userDto) {
         userService.createUser(userDto);
         return new ResponseEntity<>(HttpStatus.CREATED);
+    }
+
+    @PostMapping("/register")
+    public ResponseEntity<BaUserDto> register(final @Valid @RequestBody BaRegisterDto registerDto) {
+        return new ResponseEntity<>(userService.register(registerDto), HttpStatus.CREATED);
     }
 
     /**

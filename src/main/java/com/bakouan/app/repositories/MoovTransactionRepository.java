@@ -36,6 +36,11 @@ public interface MoovTransactionRepository extends JpaRepository<MoovTransaction
             where m.transactionStatusNormalized = com.bakouan.app.enums.NormalizedMoovStatus.SUCCESS_MOOV
               and m.completionTime >= :from
               and m.completionTime < :to
+              and (
+                upper(coalesce(m.transactionType, '')) not in ('WALLET_TO_BANK', 'MOOV_TO_BANK')
+                or m.msisdn is null
+                or length(m.msisdn) <= 12
+              )
             """)
     BigDecimal sumSuccessAmountByTransactionDateRange(@Param("from") LocalDateTime from,
                                                       @Param("to") LocalDateTime to);
@@ -46,6 +51,11 @@ public interface MoovTransactionRepository extends JpaRepository<MoovTransaction
             where m.transactionStatusNormalized = com.bakouan.app.enums.NormalizedMoovStatus.SUCCESS_MOOV
               and m.completionTime >= :from
               and m.completionTime < :to
+              and (
+                upper(coalesce(m.transactionType, '')) not in ('WALLET_TO_BANK', 'MOOV_TO_BANK')
+                or m.msisdn is null
+                or length(m.msisdn) <= 12
+              )
             """)
     long countSuccessByTransactionDateRange(@Param("from") LocalDateTime from,
                                             @Param("to") LocalDateTime to);
