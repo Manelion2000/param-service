@@ -20,8 +20,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -46,38 +48,34 @@ public class ReconciliationServiceImpl implements ReconciliationService {
         OperatorType operator = request.operator() == null ? OperatorType.MOOV : request.operator();
         LocalDate from = request.businessDate() != null ? request.businessDate() : request.dateFrom();
         LocalDate to = request.businessDate() != null ? request.businessDate() : request.dateTo();
+        if (from == null || to == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "La date metier ou la plage de dates est obligatoire.");
+        }
 
         List<FileImport> bankImports = fileImportRepository.findBySourceTypeAndOperatorScopeAndBusinessDateBetween(SourceType.BANQUE, operator, from, to);
+        ReconciliationOperatorStrategy strategy = selectedStrategy(operator);
+        List<FileImport> operatorImports = strategy.findImports(from, to);
+        validateRunInputs(operator, from, to, bankImports, operatorImports);
+
+        String bankImportIds = importIdsCsv(bankImports);
+        String operatorImportIds = importIdsCsv(operatorImports);
+        rejectAlreadyReconciled(operator, from, to, bankImportIds, operatorImportIds);
 
         ReconciliationRun run = ReconciliationRun.builder()
                 .label(request.label())
                 .operator(operator)
                 .businessDateFrom(from)
                 .businessDateTo(to)
-                .bankImportIds(bankImports.stream().map(FileImport::getId).map(String::valueOf).collect(Collectors.joining(",")))
-                .moovImportIds("")
-                .orangeImportIds("")
+                .bankImportIds(bankImportIds)
+                .moovImportIds(strategy.operatorSourceType() == SourceType.MOOV ? operatorImportIds : "")
+                .orangeImportIds(strategy.operatorSourceType() == SourceType.ORANGE ? operatorImportIds : "")
                 .startedAt(OffsetDateTime.now())
                 .status(ReconciliationRunStatus.RUNNING)
                 .build();
         run = runRepository.save(run);
 
         List<BankTransaction> bankRows = bankTransactionRepository.findByFileImportIdIn(bankImports.stream().map(FileImport::getId).toList());
-        for (ReconciliationOperatorStrategy strategy : operatorStrategies) {
-            if (!isStrategySelected(operator, strategy.operatorSourceType())) {
-                continue;
-            }
-            List<FileImport> operatorImports = strategy.findImports(from, to);
-            String ids = operatorImports.stream().map(FileImport::getId).map(String::valueOf).collect(Collectors.joining(","));
-            if (strategy.operatorSourceType() == SourceType.MOOV) {
-                run.setMoovImportIds(ids);
-                run.setOrangeImportIds("");
-            } else if (strategy.operatorSourceType() == SourceType.ORANGE) {
-                run.setOrangeImportIds(ids);
-                run.setMoovImportIds("");
-            }
-            strategy.reconcile(run, bankRows, operatorImports);
-        }
+        strategy.reconcile(run, bankRows, operatorImports);
 
         run.setStatus(ReconciliationRunStatus.COMPLETED);
         run.setFinishedAt(OffsetDateTime.now());
@@ -269,6 +267,99 @@ public class ReconciliationServiceImpl implements ReconciliationService {
     private boolean isStrategySelected(OperatorType operator, SourceType sourceType) {
         return (operator == OperatorType.MOOV && sourceType == SourceType.MOOV)
                 || (operator == OperatorType.ORANGE && sourceType == SourceType.ORANGE);
+    }
+
+    private ReconciliationOperatorStrategy selectedStrategy(OperatorType operator) {
+        return operatorStrategies.stream()
+                .filter(strategy -> isStrategySelected(operator, strategy.operatorSourceType()))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Strategie operateur introuvable pour " + operator));
+    }
+
+    private void validateRunInputs(
+            OperatorType operator,
+            LocalDate from,
+            LocalDate to,
+            List<FileImport> bankImports,
+            List<FileImport> operatorImports
+    ) {
+        if (bankImports.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Aucun import Banque " + operator + " trouve pour la periode " + periodLabel(from, to) + ". Importez d'abord le fichier Banque."
+            );
+        }
+        if (operatorImports.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Aucun import " + operator + " trouve pour la periode " + periodLabel(from, to) + ". Importez d'abord le fichier operateur."
+            );
+        }
+        if (!hasValidRows(bankImports)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Les imports Banque " + operator + " de la periode " + periodLabel(from, to) + " ne contiennent aucune ligne valide."
+            );
+        }
+        if (!hasValidRows(operatorImports)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Les imports " + operator + " de la periode " + periodLabel(from, to) + " ne contiennent aucune ligne valide."
+            );
+        }
+    }
+
+    private void rejectAlreadyReconciled(
+            OperatorType operator,
+            LocalDate from,
+            LocalDate to,
+            String bankImportIds,
+            String operatorImportIds
+    ) {
+        List<ReconciliationRun> runs = runRepository.findByOperatorAndBusinessDateOverlap(operator, from, to, Pageable.unpaged()).getContent();
+        boolean alreadyDone = runs.stream()
+                .filter(run -> run.getStatus() == ReconciliationRunStatus.COMPLETED)
+                .anyMatch(run -> Objects.equals(normalizeCsvIds(run.getBankImportIds()), bankImportIds)
+                        && Objects.equals(normalizeCsvIds(operator == OperatorType.MOOV ? run.getMoovImportIds() : run.getOrangeImportIds()), operatorImportIds));
+        if (alreadyDone) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Ces imports ont deja ete rapproches. Importez un nouveau fichier ou supprimez le run existant avant de relancer."
+            );
+        }
+    }
+
+    private boolean hasValidRows(List<FileImport> imports) {
+        return imports.stream()
+                .map(FileImport::getValidRows)
+                .filter(Objects::nonNull)
+                .anyMatch(count -> count > 0);
+    }
+
+    private String importIdsCsv(List<FileImport> imports) {
+        return imports.stream()
+                .map(FileImport::getId)
+                .filter(Objects::nonNull)
+                .sorted()
+                .map(String::valueOf)
+                .collect(Collectors.joining(","));
+    }
+
+    private String normalizeCsvIds(String csvIds) {
+        if (csvIds == null || csvIds.isBlank()) {
+            return "";
+        }
+        return Arrays.stream(csvIds.split(","))
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .map(Long::parseLong)
+                .sorted()
+                .map(String::valueOf)
+                .collect(Collectors.joining(","));
+    }
+
+    private String periodLabel(LocalDate from, LocalDate to) {
+        return Objects.equals(from, to) ? String.valueOf(from) : from + " -> " + to;
     }
 
 }

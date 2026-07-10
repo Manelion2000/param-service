@@ -179,12 +179,17 @@ public class ReportingServiceImpl implements ReportingService {
     }
 
     private ReportData loadData(ReportWindow window, OperatorType channel) {
-        List<ReconciliationRun> runs = runRepository.findByOperator(channel, Pageable.unpaged()).getContent();
-        List<Long> runIds = runs.stream().map(ReconciliationRun::getId).toList();
-        if (runIds.isEmpty()) {
+        Optional<ReconciliationRun> latestRun = runRepository
+                .findByOperatorAndBusinessDateOverlap(channel, window.from(), window.to(), Pageable.unpaged())
+                .getContent()
+                .stream()
+                .filter(run -> run.getStatus() == com.bakouan.app.enums.ReconciliationRunStatus.COMPLETED)
+                .filter(run -> run.getStartedAt() != null)
+                .max(Comparator.comparing(ReconciliationRun::getStartedAt));
+        if (latestRun.isEmpty() || latestRun.get().getId() == null) {
             return new ReportData(List.of());
         }
-        List<ReconciliationResult> results = resultRepository.findByRunIdIn(runIds);
+        List<ReconciliationResult> results = resultRepository.findByRunIdIn(List.of(latestRun.get().getId()));
         return new ReportData(enrichByTransactionDate(results, channel, window));
     }
 

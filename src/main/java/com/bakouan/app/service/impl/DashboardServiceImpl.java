@@ -41,7 +41,7 @@ public class DashboardServiceImpl implements DashboardService {
         Amounts amounts = computeAmounts(financialRows);
         long totalBank = financialRows.stream().filter(r -> r.getBankTransactionId() != null).count();
         long totalOperator = financialRows.stream().filter(r -> r.getMoovTransactionId() != null).count();
-        long totalResults = data.results.size();
+        long totalResults = financialRows.size();
         long financialTotal = financialRows.size();
         long matchOk = count(financialRows, ReconciliationResultType.MATCH_OK);
         long debitATort = count(financialRows, ReconciliationResultType.DEBIT_A_TORT);

@@ -88,5 +88,47 @@ class ReconciliationClassificationServiceTest {
         assertEquals(ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE, service.classify(null, orange));
     }
 
+    @Test
+    void shouldClassifyCompletedMoovWithLongPhoneAsApprovisionnementRegardlessOfType() {
+        MoovTransaction moov = MoovTransaction.builder()
+                .transactionStatusNormalized(NormalizedMoovStatus.SUCCESS_MOOV)
+                .transactionType("BANK_TO_WALLET")
+                .msisdn("2267000000012345")
+                .build();
+
+        assertEquals(ReconciliationResultType.APPROVISIONNEMENT, service.classify(null, moov));
+    }
+
+    @Test
+    void shouldNotClassifyFailedMoovWithLongPhoneAsApprovisionnement() {
+        MoovTransaction moov = MoovTransaction.builder()
+                .transactionStatusNormalized(NormalizedMoovStatus.FAILED_MOOV)
+                .transactionType("BANK_TO_WALLET")
+                .msisdn("2267000000012345")
+                .build();
+
+        assertEquals(ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE, service.classify(null, moov));
+    }
+
+    @Test
+    void shouldClassifySuccessfulOrangeWithLongPhoneAsApprovisionnement() {
+        OrangeTransaction orange = OrangeTransaction.builder()
+                .transactionStatusNormalized(NormalizedOrangeStatus.SUCCESS_ORANGE)
+                .senderMobileNumber("2267000000012345")
+                .build();
+
+        assertEquals(ReconciliationResultType.APPROVISIONNEMENT, service.classify(null, orange));
+    }
+
+    @Test
+    void shouldNotClassifyFailedOrangeWithLongPhoneAsApprovisionnement() {
+        OrangeTransaction orange = OrangeTransaction.builder()
+                .transactionStatusNormalized(NormalizedOrangeStatus.FAILED_ORANGE)
+                .senderMobileNumber("2267000000012345")
+                .build();
+
+        assertEquals(ReconciliationResultType.OPERATEUR_NON_ABOUTI_SANS_BANQUE, service.classify(null, orange));
+    }
+
 }
 

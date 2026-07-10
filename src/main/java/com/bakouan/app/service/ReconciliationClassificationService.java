@@ -83,8 +83,7 @@ public class ReconciliationClassificationService {
         if (moov == null) {
             return false;
         }
-        String type = moov.getTransactionType() == null ? "" : moov.getTransactionType().trim().toUpperCase();
-        if (!type.equals("WALLET_TO_BANK") && !type.equals("MOOV_TO_BANK")) {
+        if (moov.getTransactionStatusNormalized() != NormalizedMoovStatus.SUCCESS_MOOV) {
             return false;
         }
         String digits = moov.getMsisdn() == null ? "" : moov.getMsisdn().replaceAll("\\D", "");
@@ -143,6 +142,9 @@ public class ReconciliationClassificationService {
 
     public boolean isOrangeApprovisionnement(OrangeTransaction orange) {
         if (orange == null) {
+            return false;
+        }
+        if (orange.getTransactionStatusNormalized() != NormalizedOrangeStatus.SUCCESS_ORANGE) {
             return false;
         }
         String digits = orange.getSenderMobileNumber() == null ? "" : orange.getSenderMobileNumber().replaceAll("\\D", "");
