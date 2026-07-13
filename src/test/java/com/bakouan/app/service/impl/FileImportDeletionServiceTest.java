@@ -125,4 +125,15 @@ class FileImportDeletionServiceTest {
         verify(fileImportRepository).delete(fileImport);
         verify(fileStorageService).deleteIfExists("datas/moov.xls");
     }
+
+    @Test
+    void shouldRejectBankDeletionWhenOperatorIsNotProvided() {
+        assertThatThrownBy(() -> service.deleteAllImportsBySource(SourceType.BANQUE, null, false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("operator est obligatoire");
+
+        assertThatThrownBy(() -> service.deleteImportsBySourceAndBusinessDate(SourceType.BANQUE, null, LocalDate.of(2026, 4, 18), false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("operator est obligatoire");
+    }
 }

@@ -177,7 +177,10 @@ public class ReconciliationServiceImpl implements ReconciliationService {
             runs = runRepository.findByOperator(operator, Pageable.unpaged()).getContent();
         }
         return runs.stream()
+                .filter(r -> r.getStatus() == ReconciliationRunStatus.COMPLETED)
+                .filter(r -> r.getId() != null)
                 .filter(r -> r.getStartedAt() != null)
+                .filter(r -> resultRepository.countByRunId(r.getId()) > 0)
                 .max(Comparator.comparing(ReconciliationRun::getStartedAt))
                 .map(ReconciliationRun::getId);
     }

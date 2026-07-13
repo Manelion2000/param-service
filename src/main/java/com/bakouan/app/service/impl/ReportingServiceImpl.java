@@ -184,7 +184,9 @@ public class ReportingServiceImpl implements ReportingService {
                 .getContent()
                 .stream()
                 .filter(run -> run.getStatus() == com.bakouan.app.enums.ReconciliationRunStatus.COMPLETED)
+                .filter(run -> run.getId() != null)
                 .filter(run -> run.getStartedAt() != null)
+                .filter(run -> resultRepository.countByRunId(run.getId()) > 0)
                 .max(Comparator.comparing(ReconciliationRun::getStartedAt));
         if (latestRun.isEmpty() || latestRun.get().getId() == null) {
             return new ReportData(List.of());

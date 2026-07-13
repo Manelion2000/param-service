@@ -3,6 +3,7 @@ package com.bakouan.app.service.impl;
 import com.bakouan.app.dto.dashboard.*;
 import com.bakouan.app.enums.OperatorType;
 import com.bakouan.app.enums.ReconciliationResultType;
+import com.bakouan.app.enums.ReconciliationRunStatus;
 import com.bakouan.app.enums.SourceType;
 import com.bakouan.app.model.*;
 import com.bakouan.app.repositories.*;
@@ -263,6 +264,9 @@ public class DashboardServiceImpl implements DashboardService {
         } else {
             runs = runRepository.findByOperator(filter.channel(), Pageable.unpaged()).getContent();
         }
+        runs = runs.stream()
+                .filter(this::isUsableCompletedRun)
+                .toList();
         if (filter.importId() == null) {
             return runs.stream()
                     .max(Comparator.comparing(ReconciliationRun::getStartedAt, Comparator.nullsFirst(Comparator.naturalOrder())))
@@ -273,6 +277,13 @@ public class DashboardServiceImpl implements DashboardService {
                 .filter(run -> parseCsvIds(run.getBankImportIds()).contains(filter.importId())
                         || parseCsvIds(filter.channel() == OperatorType.MOOV ? run.getMoovImportIds() : run.getOrangeImportIds()).contains(filter.importId()))
                 .toList();
+    }
+
+    private boolean isUsableCompletedRun(ReconciliationRun run) {
+        return run.getStatus() == ReconciliationRunStatus.COMPLETED
+                && run.getId() != null
+                && run.getStartedAt() != null
+                && resultRepository.countByRunId(run.getId()) > 0;
     }
 
     private List<FileImport> resolveImports(DashboardFilterRequest filter, List<ReconciliationRun> runs) {

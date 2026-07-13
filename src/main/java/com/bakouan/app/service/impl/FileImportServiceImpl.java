@@ -32,6 +32,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
@@ -84,7 +86,7 @@ public class FileImportServiceImpl implements FileImportService {
                         // Orphan import metadata (transactions deleted manually): cleanup and allow re-upload.
                         fileImportRepository.delete(existing);
                         fileImportRepository.flush();
-                        fileStorageService.deleteIfExists(existing.getFilePath());
+                        deleteFileAfterCommit(existing.getFilePath());
                         return;
                     }
                     throw new ReconciliationException(
@@ -893,7 +895,7 @@ public class FileImportServiceImpl implements FileImportService {
             throw new IllegalArgumentException("operator est obligatoire pour nettoyer les imports BANQUE (MOOV ou ORANGE)");
         }
         List<FileImport> imports = new ArrayList<>(sourceType == SourceType.BANQUE
-                ? fileImportRepository.findBySourceTypeAndOperatorScopeAndBusinessDateBetween(sourceType, operatorScope, businessDate, businessDate)
+                ? resolveBankImportsByBusinessDate(operatorScope, businessDate)
                 : fileImportRepository.findBySourceTypeAndBusinessDate(sourceType, businessDate));
         if (!imports.isEmpty()) {
             return imports;
@@ -914,6 +916,15 @@ public class FileImportServiceImpl implements FileImportService {
                 .filter(fileImport -> sourceType != SourceType.BANQUE || fileImport.getOperatorScope() == operatorScope)
                 .toList());
         return imports;
+    }
+
+    private List<FileImport> resolveBankImportsByBusinessDate(OperatorType operatorScope, LocalDate businessDate) {
+        return fileImportRepository.findBySourceTypeAndOperatorScopeAndBusinessDateBetween(
+                SourceType.BANQUE,
+                operatorScope,
+                businessDate,
+                businessDate
+        );
     }
 
     private Set<Long> parseCsvIds(String csvIds) {
@@ -1016,7 +1027,7 @@ public class FileImportServiceImpl implements FileImportService {
         }
         for (FileImport fileImport : plan.imports()) {
             fileImportRepository.delete(fileImport);
-            fileStorageService.deleteIfExists(fileImport.getFilePath());
+            deleteFileAfterCommit(fileImport.getFilePath());
         }
         return new DeletionStats(
                 plan.imports().size(),
@@ -1036,6 +1047,22 @@ public class FileImportServiceImpl implements FileImportService {
     }
 
     private record DeletionStats(int deletedImports, int deletedTransactions, int deletedResults, int deletedRuns) {
+    }
+
+    private void deleteFileAfterCommit(String filePath) {
+        if (filePath == null || filePath.isBlank()) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            fileStorageService.deleteIfExists(filePath);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                fileStorageService.deleteIfExists(filePath);
+            }
+        });
     }
 
     private String extractAmplitudeOperationReference(Map<String, String> row) {
