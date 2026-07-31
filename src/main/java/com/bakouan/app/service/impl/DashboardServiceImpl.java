@@ -81,7 +81,8 @@ public class DashboardServiceImpl implements DashboardService {
                 amounts.bankTotal,
                 amounts.operatorTotal,
                 amounts.anomaliesTotal,
-                amounts.ecartGlobal
+                amounts.ecartGlobal,
+                resolveMoovClosingBalance(filter)
         );
     }
 
@@ -256,14 +257,7 @@ public class DashboardServiceImpl implements DashboardService {
                     .map(List::of)
                     .orElse(List.of());
         }
-        List<ReconciliationRun> runs;
-        LocalDate from = filter.effectiveFrom();
-        LocalDate to = filter.effectiveTo();
-        if (from != null && to != null) {
-            runs = runRepository.findByOperatorAndBusinessDateOverlap(filter.channel(), from, to, Pageable.unpaged()).getContent();
-        } else {
-            runs = runRepository.findByOperator(filter.channel(), Pageable.unpaged()).getContent();
-        }
+        List<ReconciliationRun> runs = runRepository.findByOperator(filter.channel(), Pageable.unpaged()).getContent();
         runs = runs.stream()
                 .filter(this::isUsableCompletedRun)
                 .toList();
@@ -451,6 +445,26 @@ public class DashboardServiceImpl implements DashboardService {
         return BigDecimal.valueOf(count)
                 .multiply(BigDecimal.valueOf(100))
                 .divide(BigDecimal.valueOf(total), 2, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal resolveMoovClosingBalance(DashboardFilterRequest filter) {
+        LocalDate from = filter.effectiveFrom();
+        LocalDate to = filter.effectiveTo();
+        if (filter.channel() != OperatorType.MOOV || from == null || to == null) {
+            return null;
+        }
+        return latestMoovClosingBalance(from, to);
+    }
+
+    private BigDecimal latestMoovClosingBalance(LocalDate from, LocalDate to) {
+        List<BigDecimal> balances = moovTransactionRepository.findClosingBalancesByCompletionTimeRange(
+                        from.atStartOfDay(),
+                        to.plusDays(1).atStartOfDay(),
+                        Pageable.ofSize(1)
+                );
+        return balances == null ? null : balances.stream()
+                .findFirst()
+                .orElse(null);
     }
 
     private boolean inDateRange(LocalDate date, LocalDate from, LocalDate to) {

@@ -43,6 +43,9 @@ public class MoovTransaction {
     @Column(precision = 19, scale = 2)
     private BigDecimal amount;
 
+    @Column(precision = 19, scale = 2)
+    private BigDecimal balance;
+
     private LocalDateTime initiationTime;
     private LocalDateTime completionTime;
 

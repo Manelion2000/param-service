@@ -205,6 +205,7 @@ public class FileImportServiceImpl implements FileImportService {
                             .transactionType(resolveMoovTransactionType(moovDetails, row))
                             .msisdn(ParseUtils.firstNonBlank(row.get("Initiator MSISDN"), row.get("initiator_msisdn"), row.get("msisdn"), row.get("MSISDN")))
                             .amount(extractMoovAmount(row, moovDetails))
+                            .balance(extractMoovBalance(row))
                             .initiationTime(ParseUtils.parseDateTime(ParseUtils.firstNonBlank(row.get("Initiation Time"), row.get("initiation_time"), row.get("created_at"), row.get("creation_date"))))
                             .completionTime(ParseUtils.parseDateTime(ParseUtils.firstNonBlank(row.get("Completion Time"), row.get("completion_time"), row.get("updated_at"), row.get("transaction_date"))))
                             .rawPayloadJson(row.toString())
@@ -476,6 +477,14 @@ public class FileImportServiceImpl implements FileImportService {
             return paidIn;
         }
         return ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(row.get("Amount"), row.get("amount"), row.get("MONTANT")));
+    }
+
+    private BigDecimal extractMoovBalance(Map<String, String> row) {
+        return ParseUtils.parseAbsAmount(ParseUtils.firstNonBlank(
+                row.get("Balance"),
+                row.get("balance"),
+                row.get("BALANCE")
+        ));
     }
 
     private BigDecimal extractAmplitudeAmount(Map<String, String> row) {

@@ -61,6 +61,8 @@ public class BaUserDto {
      */
     private Boolean activated = Boolean.FALSE;
 
+    private Boolean passwordResetRequired = Boolean.FALSE;
+
     @NotEmpty(message = "Le téléphone est obligatoire")
     private String telephone;
 

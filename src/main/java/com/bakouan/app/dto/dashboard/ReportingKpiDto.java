@@ -27,6 +27,9 @@ public record ReportingKpiDto(
         BigDecimal operateurSuccessSansCarthagoAmount,
         long operateurHorsPerimetreCount,
         BigDecimal operateurHorsPerimetreAmount,
+        long soldeInsuffisantCount,
+        BigDecimal soldeInsuffisantAmount,
+        BigDecimal soldeInsuffisantRate,
         BigDecimal moyenneJournaliereTransactions,
         LocalVolumePeakDto picVolumeJournalier
 ) {

@@ -93,6 +93,10 @@ public class BaUser extends BaAbstractAuditingEntity {
     @Column(name = "activated")
     private Boolean activated = Boolean.FALSE;
 
+    @NotNull
+    @Column(name = "password_reset_required", nullable = false)
+    private Boolean passwordResetRequired = Boolean.FALSE;
+
     /**
      * Le genre de l'utilisateur.
      */

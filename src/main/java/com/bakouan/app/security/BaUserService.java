@@ -28,7 +28,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.security.SecureRandom;
 import java.time.ZonedDateTime;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -39,6 +41,8 @@ import java.util.stream.Collectors;
 @Service
 @Slf4j
 public class BaUserService {
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final String TEMP_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#$%";
 
     private final IUserDetailsFacade userDetailsFacade;
     private final UserDetailsService userDetailsService;
@@ -111,31 +115,8 @@ public class BaUserService {
     }
 
     public BaUserDto register(final BaRegisterDto registerDto) {
-        log.info("Auto-inscription utilisateur: {}", registerDto.getEmail());
-        if (!Objects.equals(registerDto.getPassword(), registerDto.getConfirmation())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "La confirmation ne correspond pas au mot de passe.");
-        }
-        String email = registerDto.getEmail().trim().toLowerCase();
-        if (this.userRepository.existsByUsernameIgnoreCase(email)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cet email est deja utilise comme identifiant.");
-        }
-        if (this.userRepository.existsByEmailIgnoreCase(email)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "L'email est deja utilise.");
-        }
-
-        BaUser user = new BaUser();
-        user.setId(BaUtils.randomUUID());
-        user.setUsername(email);
-        user.setEmail(email);
-        user.setNom(registerDto.getNom());
-        user.setPrenom(registerDto.getPrenom());
-        user.setPassword(this.passwordEncoder.encode(registerDto.getPassword()));
-        user.setTelephone(email);
-        user.setLocked(Boolean.FALSE);
-        user.setActivated(Boolean.TRUE);
-        user.setProfil(resolveDefaultSelfRegistrationProfile());
-        return this.mapper.maps(this.userRepository.save(user));
+        throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                "L'auto-inscription est desactivee. Contactez un administrateur.");
     }
 
     private BaProfil resolveDefaultSelfRegistrationProfile() {
@@ -170,6 +151,94 @@ public class BaUserService {
                     profil.setDescription("Profil par defaut des comptes crees depuis le formulaire public");
                     profil.getRoles().add(connectRole);
                     return profil;
+    }
+
+    public List<AdminUserResponse> fetchAdminUsers() {
+        logService.log(new BaLogDto(EAction.V, "Administration utilisateurs"));
+        return this.userRepository.fetchMulticrites(EStatut.A.name(), "", "", "")
+                .map(this::toAdminUserResponse)
+                .collect(Collectors.toList());
+    }
+
+    public AdminUserResponse createManagedUser(final AdminUserCreateRequest request) {
+        logService.log(new BaLogDto(EAction.C, "Administration utilisateurs : " + request.email()));
+        String email = normalizeEmail(request.email());
+        if (this.userRepository.existsByUsernameIgnoreCase(email) || this.userRepository.existsByEmailIgnoreCase(email)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "L'email est deja utilise.");
+        }
+        if (this.userRepository.existsByTelephoneIgnoreCase(request.telephone())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Le numero de telephone est deja utilise.");
+        }
+
+        String temporaryPassword = generateTemporaryPassword();
+        BaUser user = new BaUser();
+        user.setId(BaUtils.randomUUID());
+        user.setUsername(email);
+        user.setEmail(email);
+        user.setNom(request.nom());
+        user.setPrenom(request.prenom());
+        user.setTelephone(request.telephone());
+        user.setPassword(passwordEncoder.encode(temporaryPassword));
+        user.setLocked(Boolean.FALSE);
+        user.setActivated(Boolean.TRUE);
+        user.setPasswordResetRequired(Boolean.TRUE);
+        user.setProfil(resolveManagedProfile(request.profile()));
+        BaUser saved = userRepository.save(user);
+        return toAdminUserResponse(saved, temporaryPassword);
+    }
+
+    public AdminUserResponse updateManagedUser(final String id, final AdminUserUpdateRequest request) {
+        BaUser user = findActiveUser(id);
+        String email = normalizeEmail(request.email());
+        if (!email.equalsIgnoreCase(user.getEmail())
+                && (userRepository.existsByUsernameIgnoreCase(email) || userRepository.existsByEmailIgnoreCase(email))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "L'email est deja utilise.");
+        }
+        if (this.userRepository.checkDuplicateTelephone(id, request.telephone())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Le numero de telephone est deja utilise.");
+        }
+        user.setEmail(email);
+        user.setUsername(email);
+        user.setNom(request.nom());
+        user.setPrenom(request.prenom());
+        user.setTelephone(request.telephone());
+        user.setProfil(resolveManagedProfile(request.profile()));
+        logService.log(new BaLogDto(EAction.U, "Administration utilisateurs : " + email));
+        return toAdminUserResponse(userRepository.save(user));
+    }
+
+    public AdminUserResponse activateManagedUser(final String id) {
+        BaUser user = findActiveUser(id);
+        user.setActivated(Boolean.TRUE);
+        logService.log(new BaLogDto(EAction.U, "Activation utilisateur : " + user.getUsername()));
+        return toAdminUserResponse(userRepository.save(user));
+    }
+
+    public AdminUserResponse disableManagedUser(final String id) {
+        BaUser user = findActiveUser(id);
+        user.setActivated(Boolean.FALSE);
+        logService.log(new BaLogDto(EAction.U, "Desactivation utilisateur : " + user.getUsername()));
+        return toAdminUserResponse(userRepository.save(user));
+    }
+
+    public AdminUserResponse unlockManagedUser(final String id) {
+        BaUser user = findActiveUser(id);
+        user.setLocked(Boolean.FALSE);
+        logService.log(new BaLogDto(EAction.U, "Deverrouillage utilisateur : " + user.getUsername()));
+        return toAdminUserResponse(userRepository.save(user));
+    }
+
+    public AdminPasswordResetResponse resetManagedPassword(final String id) {
+        BaUser user = findActiveUser(id);
+        String temporaryPassword = generateTemporaryPassword();
+        user.setPassword(passwordEncoder.encode(temporaryPassword));
+        user.setPasswordResetRequired(Boolean.TRUE);
+        user.setActivated(Boolean.TRUE);
+        user.setResetKey(null);
+        user.setResetDate(null);
+        userRepository.save(user);
+        logService.log(new BaLogDto(EAction.U, "Reset mot de passe utilisateur : " + user.getUsername()));
+        return new AdminPasswordResetResponse(user.getId(), user.getUsername(), temporaryPassword);
     }
 
 
@@ -255,6 +324,10 @@ public class BaUserService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Votre ancien mot de passe est incorrect");
         }
         ylUser.setPassword(this.passwordEncoder.encode(pwDto.getNouveau()));
+        ylUser.setPasswordResetRequired(Boolean.FALSE);
+        ylUser.setActivated(Boolean.TRUE);
+        ylUser.setResetKey(null);
+        ylUser.setResetDate(null);
         this.userRepository.save(ylUser);
     }
 
@@ -271,6 +344,12 @@ public class BaUserService {
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.BAD_REQUEST, "L'utilisateur n'existe pas."));
         return ylUser.getActivated();
+    }
+
+    public Boolean isPasswordResetRequired(final String username) {
+        return this.userRepository.findOneByUsernameIgnoreCaseAndStatut(username, EStatut.A)
+                .map(BaUser::getPasswordResetRequired)
+                .orElse(Boolean.FALSE);
     }
 
     /**
@@ -503,6 +582,7 @@ public class BaUserService {
                     "La confirmation ne correspond pas au mot de passe.");
         }
         user.setPassword(this.passwordEncoder.encode(updatePasswordDto.getNouveau()));
+        user.setPasswordResetRequired(Boolean.FALSE);
         this.userRepository.save(user);
     }
 
@@ -569,5 +649,89 @@ public class BaUserService {
                     usr.setActivated(Boolean.TRUE);
                     userRepository.save(usr);
                 });
+    }
+
+    private BaUser findActiveUser(String id) {
+        return userRepository.findById(id)
+                .filter(user -> user.getStatut() == EStatut.A)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Utilisateur introuvable."));
+    }
+
+    private BaProfil resolveManagedProfile(String profile) {
+        String normalized = profile == null ? "AGENT" : profile.trim().toUpperCase();
+        String expectedLibelle = switch (normalized) {
+            case "ADMIN" -> "ADMIN";
+            case "AGENT" -> "AGENT";
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Profil invalide.");
+        };
+        String roleCode = "ADMIN".equals(expectedLibelle) ? BaRolesConstants.BA_ADMIN : BaRolesConstants.BA_AGENT;
+        BaRole role = resolveRole(roleCode, expectedLibelle);
+        return profilRepository.findByStatutOrderByCreatedDateDesc(EStatut.A).stream()
+                .filter(profil -> expectedLibelle.equalsIgnoreCase(profil.getLibelle()))
+                .findFirst()
+                .map(profil -> {
+                    if (profil.getRoles().stream().noneMatch(r -> roleCode.equals(r.getCode()))) {
+                        profil.getRoles().add(role);
+                        return profilRepository.save(profil);
+                    }
+                    return profil;
+                })
+                .orElseGet(() -> {
+                    BaProfil profil = new BaProfil();
+                    profil.setId(BaUtils.randomUUID());
+                    profil.setLibelle(expectedLibelle);
+                    profil.setDescription("Profil " + expectedLibelle + " de la plateforme de reconciliation");
+                    profil.getRoles().add(role);
+                    return profilRepository.save(profil);
+                });
+    }
+
+    private BaRole resolveRole(String code, String label) {
+        return roleRepository.findAll().stream()
+                .filter(role -> code.equals(role.getCode()))
+                .findFirst()
+                .orElseGet(() -> {
+                    BaRole role = new BaRole();
+                    role.setId(BaUtils.randomUUID());
+                    role.setCode(code);
+                    role.setLibelle(label);
+                    return roleRepository.save(role);
+                });
+    }
+
+    private AdminUserResponse toAdminUserResponse(BaUser user) {
+        return toAdminUserResponse(user, null);
+    }
+
+    private AdminUserResponse toAdminUserResponse(BaUser user, String temporaryPassword) {
+        return new AdminUserResponse(
+                user.getId(),
+                user.getUsername(),
+                user.getNom(),
+                user.getPrenom(),
+                user.getEmail(),
+                user.getTelephone(),
+                user.getProfil() == null ? null : user.getProfil().getLibelle(),
+                user.getActivated(),
+                user.getLocked(),
+                user.getPasswordResetRequired(),
+                user.getLastConnexionDate(),
+                temporaryPassword
+        );
+    }
+
+    private String normalizeEmail(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "L'email est obligatoire.");
+        }
+        return raw.trim().toLowerCase();
+    }
+
+    private String generateTemporaryPassword() {
+        StringBuilder out = new StringBuilder(12);
+        for (int i = 0; i < 12; i++) {
+            out.append(TEMP_PASSWORD_ALPHABET.charAt(SECURE_RANDOM.nextInt(TEMP_PASSWORD_ALPHABET.length())));
+        }
+        return out.toString();
     }
 }

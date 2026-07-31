@@ -64,7 +64,7 @@ public class CompensationServiceImpl implements CompensationService {
         BigDecimal bank = nz(bankTransactionRepository.sumSuccessAmountByTransactionDateRangeAndOperator(from, to, OperatorType.MOOV));
         BigDecimal op = nz(moovTransactionRepository.sumSuccessAmountByTransactionDateRange(from, to));
         BigDecimal diff = bank.subtract(op);
-        return new CompensationDailyDto(d, OperatorType.MOOV, opCount, bankCount, op, bank, diff, decision(diff));
+        return new CompensationDailyDto(d, OperatorType.MOOV, opCount, bankCount, op, bank, diff, decision(diff), latestMoovClosingBalance(from, to));
     }
 
     private CompensationDailyDto buildForOrange(LocalDate d) {
@@ -75,7 +75,7 @@ public class CompensationServiceImpl implements CompensationService {
         BigDecimal bank = nz(bankTransactionRepository.sumSuccessAmountByTransactionDateRangeAndOperator(from, to, OperatorType.ORANGE));
         BigDecimal op = nz(orangeTransactionRepository.sumSuccessAmountByTransactionDateRange(from, to));
         BigDecimal diff = bank.subtract(op);
-        return new CompensationDailyDto(d, OperatorType.ORANGE, opCount, bankCount, op, bank, diff, decision(diff));
+        return new CompensationDailyDto(d, OperatorType.ORANGE, opCount, bankCount, op, bank, diff, decision(diff), null);
     }
 
     private String decision(BigDecimal diff) {
@@ -96,7 +96,20 @@ public class CompensationServiceImpl implements CompensationService {
                 .mapToLong(CompensationDailyDto::bankSuccessCount)
                 .sum();
         BigDecimal totalDiff = totalBank.subtract(totalOperator).setScale(2, RoundingMode.HALF_UP);
-        return new CompensationPeriodResponseDto(type, label, rows, totalOperatorCount, totalBankCount, totalOperator, totalBank, totalDiff, decision(totalDiff));
+        BigDecimal moovClosingBalance = rows.stream()
+                .filter(row -> row.operator() == OperatorType.MOOV)
+                .map(CompensationDailyDto::moovClosingBalance)
+                .filter(java.util.Objects::nonNull)
+                .reduce((previous, current) -> current)
+                .orElse(null);
+        return new CompensationPeriodResponseDto(type, label, rows, totalOperatorCount, totalBankCount, totalOperator, totalBank, totalDiff, decision(totalDiff), moovClosingBalance);
+    }
+
+    private BigDecimal latestMoovClosingBalance(LocalDateTime from, LocalDateTime to) {
+        return moovTransactionRepository.findClosingBalancesByCompletionTimeRange(from, to, org.springframework.data.domain.Pageable.ofSize(1))
+                .stream()
+                .findFirst()
+                .orElse(null);
     }
 
     private BigDecimal nz(BigDecimal value) {

@@ -35,6 +35,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.text.Normalizer;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -115,6 +116,10 @@ public class ReportingServiceImpl implements ReportingService {
             y = writeLine(stream, 40, y, fontRegular, 10,
                     "Hors perimetre operateur: " + k.operateurHorsPerimetreCount()
                             + " | Montant: " + k.operateurHorsPerimetreAmount());
+            y = writeLine(stream, 40, y, fontRegular, 10,
+                    "Solde insuffisant: " + k.soldeInsuffisantCount()
+                            + " | Montant: " + k.soldeInsuffisantAmount()
+                            + " | Part anomalies: " + k.soldeInsuffisantRate() + "%");
             y = writeLine(stream, 40, y - 4, fontBold, 11, "Synthese Executive");
             for (String insight : buildExecutiveInsights(summary)) {
                 y = writeLine(stream, 40, y, fontRegular, 10, "- " + insight);
@@ -179,20 +184,52 @@ public class ReportingServiceImpl implements ReportingService {
     }
 
     private ReportData loadData(ReportWindow window, OperatorType channel) {
-        Optional<ReconciliationRun> latestRun = runRepository
-                .findByOperatorAndBusinessDateOverlap(channel, window.from(), window.to(), Pageable.unpaged())
+        List<Long> runIds = latestUsableRunsByImports(channel).stream()
+                .map(ReconciliationRun::getId)
+                .toList();
+        if (runIds.isEmpty()) {
+            return new ReportData(List.of());
+        }
+        List<ReconciliationResult> results = resultRepository.findByRunIdIn(runIds);
+        return new ReportData(enrichByTransactionDate(results, channel, window));
+    }
+
+    private List<ReconciliationRun> latestUsableRunsByImports(OperatorType channel) {
+        Map<String, ReconciliationRun> latestByImports = new HashMap<>();
+        runRepository
+                .findByOperator(channel, Pageable.unpaged())
                 .getContent()
                 .stream()
                 .filter(run -> run.getStatus() == com.bakouan.app.enums.ReconciliationRunStatus.COMPLETED)
                 .filter(run -> run.getId() != null)
                 .filter(run -> run.getStartedAt() != null)
                 .filter(run -> resultRepository.countByRunId(run.getId()) > 0)
-                .max(Comparator.comparing(ReconciliationRun::getStartedAt));
-        if (latestRun.isEmpty() || latestRun.get().getId() == null) {
-            return new ReportData(List.of());
+                .forEach(run -> latestByImports.merge(
+                        runImportKey(run, channel),
+                        run,
+                        (current, candidate) -> candidate.getStartedAt().isAfter(current.getStartedAt()) ? candidate : current
+                ));
+        return latestByImports.values().stream()
+                .sorted(Comparator.comparing(ReconciliationRun::getStartedAt))
+                .toList();
+    }
+
+    private String runImportKey(ReconciliationRun run, OperatorType channel) {
+        String operatorImportIds = channel == OperatorType.MOOV ? run.getMoovImportIds() : run.getOrangeImportIds();
+        return normalizeCsvIds(run.getBankImportIds()) + "|" + normalizeCsvIds(operatorImportIds);
+    }
+
+    private String normalizeCsvIds(String csvIds) {
+        if (csvIds == null || csvIds.isBlank()) {
+            return "";
         }
-        List<ReconciliationResult> results = resultRepository.findByRunIdIn(List.of(latestRun.get().getId()));
-        return new ReportData(enrichByTransactionDate(results, channel, window));
+        return Arrays.stream(csvIds.split(","))
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .map(Long::parseLong)
+                .sorted()
+                .map(String::valueOf)
+                .collect(Collectors.joining(","));
     }
 
     private ReportingKpiDto buildKpis(List<ReportingRow> rows, OperatorType channel, List<ReportingDailyBreakdownDto> daily) {
@@ -224,6 +261,10 @@ public class ReportingServiceImpl implements ReportingService {
         BigDecimal bankSuccessAmount = sum(bankSuccessRows, ReportingRow::bankAmount);
         BigDecimal operatorSuccessWithoutCarthagoAmount = sum(operatorSuccessWithoutCarthagoRows, ReportingRow::operatorAmount);
         BigDecimal operatorOutOfScopeAmount = sum(operatorOutOfScopeRows, r -> r.result().getMoovAmount());
+        List<ReportingRow> soldeInsuffisantRows = financialRows.stream()
+                .filter(this::isInsufficientBalanceFailure)
+                .toList();
+        BigDecimal soldeInsuffisantAmount = sum(soldeInsuffisantRows, ReportingRow::bankAmount);
         BigDecimal avgDaily = daily.isEmpty()
                 ? BigDecimal.ZERO
                 : BigDecimal.valueOf(total).divide(BigDecimal.valueOf(daily.size()), 2, RoundingMode.HALF_UP);
@@ -257,6 +298,9 @@ public class ReportingServiceImpl implements ReportingService {
                 operatorSuccessWithoutCarthagoAmount,
                 operatorOutOfScopeRows.size(),
                 operatorOutOfScopeAmount,
+                soldeInsuffisantRows.size(),
+                soldeInsuffisantAmount,
+                rate(soldeInsuffisantRows.size(), anomalies),
                 avgDaily,
                 peak
         );
@@ -347,7 +391,7 @@ public class ReportingServiceImpl implements ReportingService {
                 r.getBankAmount(),
                 r.getMoovAmount(),
                 r.getAmountDifference(),
-                r.getReason()
+                containsInsufficientBalance(row.bankRejectReason()) ? row.bankRejectReason() : r.getReason()
         );
     }
 
@@ -393,6 +437,9 @@ public class ReportingServiceImpl implements ReportingService {
         rowIdx = writeKv(sheet, rowIdx, "Succes operateur sans Carthago (montant)", k.operateurSuccessSansCarthagoAmount());
         rowIdx = writeKv(sheet, rowIdx, "Operateur hors perimetre (count)", k.operateurHorsPerimetreCount());
         rowIdx = writeKv(sheet, rowIdx, "Operateur hors perimetre (montant)", k.operateurHorsPerimetreAmount());
+        rowIdx = writeKv(sheet, rowIdx, "Solde insuffisant (count)", k.soldeInsuffisantCount());
+        rowIdx = writeKv(sheet, rowIdx, "Solde insuffisant (montant)", k.soldeInsuffisantAmount());
+        rowIdx = writeKv(sheet, rowIdx, "Solde insuffisant (% anomalies)", k.soldeInsuffisantRate());
         rowIdx = writeKv(sheet, rowIdx, "Moyenne journaliere", k.moyenneJournaliereTransactions());
         rowIdx = writeKv(sheet, rowIdx, "Pic volume (date)", k.picVolumeJournalier().businessDate());
         writeKv(sheet, rowIdx, "Pic volume (count)", k.picVolumeJournalier().totalTransactions());
@@ -617,7 +664,8 @@ public class ReportingServiceImpl implements ReportingService {
                         ? result.getMoovAmount()
                         : operatorAmountById.getOrDefault(result.getMoovTransactionId(), result.getMoovAmount());
                 String operationType = resolveOperationType(result, bankOperationTypes, operatorOperationTypes);
-                enriched.add(new ReportingRow(result, txDate, bankSuccess, operatorSuccess, bankAmount, operatorAmount, operationType));
+                String bankRejectReason = bank == null ? null : bank.getRejectReasonRaw();
+                enriched.add(new ReportingRow(result, txDate, bankSuccess, operatorSuccess, bankAmount, operatorAmount, operationType, bankRejectReason));
             }
         }
         return enriched;
@@ -677,6 +725,20 @@ public class ReportingServiceImpl implements ReportingService {
         return result.getBusinessDate();
     }
 
+    private boolean isInsufficientBalanceFailure(ReportingRow row) {
+        return containsInsufficientBalance(row.bankRejectReason());
+    }
+
+    private boolean containsInsufficientBalance(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return false;
+        }
+        String normalized = Normalizer.normalize(reason, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase(Locale.ROOT);
+        return normalized.contains("solde insuffisant");
+    }
+
     private List<String> buildExecutiveInsights(ReportingSummaryDto summary) {
         ReportingKpiDto k = summary.kpis();
         List<String> insights = new ArrayList<>();
@@ -718,6 +780,7 @@ public class ReportingServiceImpl implements ReportingService {
             boolean operatorSuccess,
             BigDecimal bankAmount,
             BigDecimal operatorAmount,
-            String operationType
+            String operationType,
+            String bankRejectReason
     ) {}
 }

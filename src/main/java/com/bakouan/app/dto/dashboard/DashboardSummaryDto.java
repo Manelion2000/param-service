@@ -30,6 +30,7 @@ public record DashboardSummaryDto(
         BigDecimal montantGlobalBanque,
         BigDecimal montantGlobalOperateur,
         BigDecimal montantAnomalies,
-        BigDecimal ecartGlobal
+        BigDecimal ecartGlobal,
+        BigDecimal moovClosingBalance
 ) {
 }

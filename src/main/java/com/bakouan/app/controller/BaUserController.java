@@ -1,6 +1,10 @@
 package com.bakouan.app.controller;
 
 
+import com.bakouan.app.dto.AdminPasswordResetResponse;
+import com.bakouan.app.dto.AdminUserCreateRequest;
+import com.bakouan.app.dto.AdminUserResponse;
+import com.bakouan.app.dto.AdminUserUpdateRequest;
 import com.bakouan.app.dto.BaJWTTokenDto;
 import com.bakouan.app.dto.BaLoginDto;
 import com.bakouan.app.dto.BaProfilDto;
@@ -24,6 +28,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -69,6 +74,7 @@ public class BaUserController {
             SecurityContextHolder.getContext().setAuthentication(authentication);
             boolean rememberMe = Boolean.TRUE.equals(loginVM.getRememberMe());
             jwt = tokenProvider.createToken(authentication, rememberMe);
+            jwt.setPasswordResetRequired(userService.isPasswordResetRequired(loginVM.getUsername()));
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Le mot de passe et le nom d'utilisateur "
                     + "ne correspondent pas.");
@@ -103,6 +109,43 @@ public class BaUserController {
     @PostMapping("/register")
     public ResponseEntity<BaUserDto> register(final @Valid @RequestBody BaRegisterDto registerDto) {
         return new ResponseEntity<>(userService.register(registerDto), HttpStatus.CREATED);
+    }
+
+    @GetMapping("/admin/users")
+    public ResponseEntity<List<AdminUserResponse>> adminUsers() {
+        return ResponseEntity.ok(userService.fetchAdminUsers());
+    }
+
+    @PostMapping("/admin/users")
+    public ResponseEntity<AdminUserResponse> createAdminUser(@Valid @RequestBody AdminUserCreateRequest request) {
+        return new ResponseEntity<>(userService.createManagedUser(request), HttpStatus.CREATED);
+    }
+
+    @PutMapping("/admin/users/{id}")
+    public ResponseEntity<AdminUserResponse> updateAdminUser(
+            @PathVariable String id,
+            @Valid @RequestBody AdminUserUpdateRequest request) {
+        return ResponseEntity.ok(userService.updateManagedUser(id, request));
+    }
+
+    @PatchMapping("/admin/users/{id}/activate")
+    public ResponseEntity<AdminUserResponse> activateAdminUser(@PathVariable String id) {
+        return ResponseEntity.ok(userService.activateManagedUser(id));
+    }
+
+    @PatchMapping("/admin/users/{id}/disable")
+    public ResponseEntity<AdminUserResponse> disableAdminUser(@PathVariable String id) {
+        return ResponseEntity.ok(userService.disableManagedUser(id));
+    }
+
+    @PatchMapping("/admin/users/{id}/unlock")
+    public ResponseEntity<AdminUserResponse> unlockAdminUser(@PathVariable String id) {
+        return ResponseEntity.ok(userService.unlockManagedUser(id));
+    }
+
+    @PostMapping("/admin/users/{id}/reset-password")
+    public ResponseEntity<AdminPasswordResetResponse> resetAdminUserPassword(@PathVariable String id) {
+        return ResponseEntity.ok(userService.resetManagedPassword(id));
     }
 
     /**

@@ -34,7 +34,7 @@ class DashboardControllerUnitTest {
                 86, 143, 86, 80, 5, 1, 2, 57, 0, 1, 0, 3, 0,
                 new BigDecimal("93.02"), new BigDecimal("89.50"), new BigDecimal("6.98"),
                 new BigDecimal("1200000"), new BigDecimal("1195000"),
-                new BigDecimal("45000"), new BigDecimal("5000")
+                new BigDecimal("45000"), new BigDecimal("5000"), null
         );
         when(service.summary(any())).thenReturn(expected);
 
@@ -80,7 +80,7 @@ class DashboardControllerUnitTest {
                 OperatorType.MOOV,
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null
         );
         when(service.summary(any())).thenReturn(expected);
 

@@ -10,6 +10,8 @@ public final class BaRolesConstants {
      */
     public static final String BA_ADMIN = "BA_ADMIN";
 
+    public static final String BA_AGENT = "BA_AGENT";
+
     /**
      * Tout utilisateur disposant d'un compte(role commun).
      */

@@ -7,6 +7,7 @@ import com.bakouan.app.dto.dashboard.DataQualityDto;
 import com.bakouan.app.enums.OperatorType;
 import com.bakouan.app.enums.ReconciliationResultType;
 import com.bakouan.app.enums.ReconciliationRunStatus;
+import com.bakouan.app.model.BankTransaction;
 import com.bakouan.app.model.FileImport;
 import com.bakouan.app.model.ReconciliationResult;
 import com.bakouan.app.model.ReconciliationRun;
@@ -21,6 +22,7 @@ import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -88,7 +90,7 @@ class DashboardServiceImplTest {
                 .businessDate(LocalDate.of(2026, 3, 11))
                 .build();
 
-        when(runRepository.findByOperatorAndBusinessDateOverlap(OperatorType.MOOV, LocalDate.of(2026, 3, 11), LocalDate.of(2026, 3, 11), Pageable.unpaged()))
+        when(runRepository.findByOperator(OperatorType.MOOV, Pageable.unpaged()))
                 .thenReturn(new PageImpl<>(List.of(run)));
         when(resultRepository.countByRunId(10L)).thenReturn(2);
         when(resultRepository.findByRunIdIn(List.of(10L))).thenReturn(List.of(match, debit));
@@ -205,7 +207,7 @@ class DashboardServiceImplTest {
                 .businessDate(LocalDate.of(2026, 3, 11))
                 .build();
 
-        when(runRepository.findByOperatorAndBusinessDateOverlap(OperatorType.MOOV, LocalDate.of(2026, 3, 11), LocalDate.of(2026, 3, 11), Pageable.unpaged()))
+        when(runRepository.findByOperator(OperatorType.MOOV, Pageable.unpaged()))
                 .thenReturn(new PageImpl<>(List.of(oldRun, latestRun)));
         when(resultRepository.countByRunId(10L)).thenReturn(1);
         when(resultRepository.countByRunId(11L)).thenReturn(1);
@@ -259,11 +261,58 @@ class DashboardServiceImplTest {
                 .businessDate(LocalDate.of(2026, 3, 11))
                 .build();
 
-        when(runRepository.findByOperatorAndBusinessDateOverlap(OperatorType.MOOV, LocalDate.of(2026, 3, 11), LocalDate.of(2026, 3, 11), Pageable.unpaged()))
+        when(runRepository.findByOperator(OperatorType.MOOV, Pageable.unpaged()))
                 .thenReturn(new PageImpl<>(List.of(usableRun, emptyLatestRun)));
         when(resultRepository.countByRunId(10L)).thenReturn(1);
         when(resultRepository.countByRunId(11L)).thenReturn(0);
         when(resultRepository.findByRunIdIn(List.of(10L))).thenReturn(List.of(usableResult));
+
+        DashboardSummaryDto summary = service.summary(new DashboardFilterRequest(
+                LocalDate.of(2026, 3, 11),
+                null,
+                null,
+                OperatorType.MOOV,
+                null,
+                null
+        ));
+
+        assertThat(summary.totalResults()).isEqualTo(1);
+        assertThat(summary.matchOk()).isEqualTo(1);
+        assertThat(summary.montantGlobalBanque()).isEqualByComparingTo("1000");
+    }
+
+    @Test
+    void shouldFilterDashboardByTransactionDateNotRunDate() {
+        ReconciliationRun run = ReconciliationRun.builder()
+                .id(10L)
+                .operator(OperatorType.MOOV)
+                .businessDateFrom(LocalDate.of(2026, 3, 10))
+                .businessDateTo(LocalDate.of(2026, 3, 10))
+                .startedAt(OffsetDateTime.parse("2026-03-11T08:00:00Z"))
+                .status(ReconciliationRunStatus.COMPLETED)
+                .bankImportIds("1")
+                .moovImportIds("2")
+                .build();
+        ReconciliationResult result = ReconciliationResult.builder()
+                .run(run)
+                .resultType(ReconciliationResultType.MATCH_OK)
+                .bankTransactionId(1L)
+                .moovTransactionId(2L)
+                .bankAmount(new BigDecimal("1000"))
+                .moovAmount(new BigDecimal("1000"))
+                .transactionKey("K1")
+                .businessDate(LocalDate.of(2026, 3, 10))
+                .build();
+        BankTransaction bankTransaction = BankTransaction.builder()
+                .id(1L)
+                .transactionDate(LocalDateTime.of(2026, 3, 11, 9, 30))
+                .build();
+
+        when(runRepository.findByOperator(OperatorType.MOOV, Pageable.unpaged()))
+                .thenReturn(new PageImpl<>(List.of(run)));
+        when(resultRepository.countByRunId(10L)).thenReturn(1);
+        when(resultRepository.findByRunIdIn(List.of(10L))).thenReturn(List.of(result));
+        when(bankTransactionRepository.findAllById(java.util.Set.of(1L))).thenReturn(List.of(bankTransaction));
 
         DashboardSummaryDto summary = service.summary(new DashboardFilterRequest(
                 LocalDate.of(2026, 3, 11),

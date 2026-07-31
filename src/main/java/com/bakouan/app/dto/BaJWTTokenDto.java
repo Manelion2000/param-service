@@ -19,6 +19,8 @@ public class BaJWTTokenDto {
 
     private long expiresIn;
 
+    private boolean passwordResetRequired;
+
     /**
      * Fonction de récupération du token.
      *

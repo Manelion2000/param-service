@@ -13,6 +13,7 @@ public record CompensationDailyDto(
         BigDecimal operatorSuccessAmount,
         BigDecimal bankSuccessAmount,
         BigDecimal difference,
-        String decision
+        String decision,
+        BigDecimal moovClosingBalance
 ) {
 }

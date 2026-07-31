@@ -12,6 +12,7 @@ public record CompensationPeriodResponseDto(
         BigDecimal totalOperatorSuccessAmount,
         BigDecimal totalBankSuccessAmount,
         BigDecimal totalDifference,
-        String decision
+        String decision,
+        BigDecimal moovClosingBalance
 ) {
 }

@@ -59,5 +59,17 @@ public interface MoovTransactionRepository extends JpaRepository<MoovTransaction
             """)
     long countSuccessByTransactionDateRange(@Param("from") LocalDateTime from,
                                             @Param("to") LocalDateTime to);
+
+    @Query("""
+            select m.balance
+            from MoovTransaction m
+            where m.completionTime >= :from
+              and m.completionTime < :to
+              and m.balance is not null
+            order by m.completionTime desc, m.id desc
+            """)
+    List<BigDecimal> findClosingBalancesByCompletionTimeRange(@Param("from") LocalDateTime from,
+                                                              @Param("to") LocalDateTime to,
+                                                              Pageable pageable);
 }
 
