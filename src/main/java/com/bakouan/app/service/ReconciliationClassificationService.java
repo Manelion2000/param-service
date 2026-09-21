@@ -12,6 +12,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.text.Normalizer;
+import java.util.Locale;
 
 @Service
 public class ReconciliationClassificationService {
@@ -48,6 +50,10 @@ public class ReconciliationClassificationService {
         if (bank.getAllocationStatusNormalized() == NormalizedBankStatus.UNKNOWN_BANK
                 || moov.getTransactionStatusNormalized() == NormalizedMoovStatus.UNKNOWN_MOOV) {
             return ReconciliationResultType.STATUT_INCONNU;
+        }
+        if (isGeneratedOrIssuedBankStatus(bank)
+                && moov.getTransactionStatusNormalized() == NormalizedMoovStatus.FAILED_MOOV) {
+            return ReconciliationResultType.ECHEC_DES_DEUX_COTES;
         }
         if (isGeneratedAndAccountedInAmplitude(bank)) {
             return ReconciliationResultType.MATCH_OK;
@@ -117,6 +123,10 @@ public class ReconciliationClassificationService {
                 || orange.getTransactionStatusNormalized() == NormalizedOrangeStatus.UNKNOWN_ORANGE) {
             return ReconciliationResultType.STATUT_INCONNU;
         }
+        if (isGeneratedOrIssuedBankStatus(bank)
+                && orange.getTransactionStatusNormalized() == NormalizedOrangeStatus.FAILED_ORANGE) {
+            return ReconciliationResultType.ECHEC_DES_DEUX_COTES;
+        }
         if (isGeneratedAndAccountedInAmplitude(bank)) {
             return ReconciliationResultType.MATCH_OK;
         }
@@ -162,6 +172,26 @@ public class ReconciliationClassificationService {
             return false;
         }
         return amplitudeTransactionRepository.existsByOperationReference(ref.trim());
+    }
+
+    private boolean isGeneratedOrIssuedBankStatus(BankTransaction bank) {
+        if (bank == null) {
+            return false;
+        }
+        String key = normalizeStatusKey(bank.getAllocationStatusRaw());
+        return key.equals("paiementgenere")
+                || key.equals("payementgenere")
+                || key.equals("paymentissued")
+                || key.equals("payementissued");
+    }
+
+    private String normalizeStatusKey(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String normalized = Normalizer.normalize(raw, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "");
+        return normalized.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
     }
 
 }

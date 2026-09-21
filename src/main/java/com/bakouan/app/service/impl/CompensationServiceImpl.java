@@ -2,7 +2,9 @@ package com.bakouan.app.service.impl;
 
 import com.bakouan.app.dto.CompensationDailyDto;
 import com.bakouan.app.dto.CompensationPeriodResponseDto;
+import com.bakouan.app.enums.NormalizedBankStatus;
 import com.bakouan.app.enums.OperatorType;
+import com.bakouan.app.model.BankTransaction;
 import com.bakouan.app.repositories.BankTransactionRepository;
 import com.bakouan.app.repositories.MoovTransactionRepository;
 import com.bakouan.app.repositories.OrangeTransactionRepository;
@@ -11,10 +13,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.text.Normalizer;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
 import java.math.RoundingMode;
 
 @Service
@@ -59,23 +64,23 @@ public class CompensationServiceImpl implements CompensationService {
     private CompensationDailyDto buildForMoov(LocalDate d) {
         LocalDateTime from = d.atStartOfDay();
         LocalDateTime to = d.plusDays(1).atStartOfDay();
-        long bankCount = bankTransactionRepository.countSuccessByTransactionDateRangeAndOperator(from, to, OperatorType.MOOV);
+        BankSuccessTotals bankTotals = bankSuccessTotals(from, to, OperatorType.MOOV);
         long opCount = moovTransactionRepository.countSuccessByTransactionDateRange(from, to);
-        BigDecimal bank = nz(bankTransactionRepository.sumSuccessAmountByTransactionDateRangeAndOperator(from, to, OperatorType.MOOV));
+        BigDecimal bank = bankTotals.amount();
         BigDecimal op = nz(moovTransactionRepository.sumSuccessAmountByTransactionDateRange(from, to));
         BigDecimal diff = bank.subtract(op);
-        return new CompensationDailyDto(d, OperatorType.MOOV, opCount, bankCount, op, bank, diff, decision(diff), latestMoovClosingBalance(from, to));
+        return new CompensationDailyDto(d, OperatorType.MOOV, opCount, bankTotals.count(), op, bank, diff, decision(diff), latestMoovClosingBalance(from, to));
     }
 
     private CompensationDailyDto buildForOrange(LocalDate d) {
         LocalDateTime from = d.atStartOfDay();
         LocalDateTime to = d.plusDays(1).atStartOfDay();
-        long bankCount = bankTransactionRepository.countSuccessByTransactionDateRangeAndOperator(from, to, OperatorType.ORANGE);
+        BankSuccessTotals bankTotals = bankSuccessTotals(from, to, OperatorType.ORANGE);
         long opCount = orangeTransactionRepository.countSuccessByTransactionDateRange(from, to);
-        BigDecimal bank = nz(bankTransactionRepository.sumSuccessAmountByTransactionDateRangeAndOperator(from, to, OperatorType.ORANGE));
+        BigDecimal bank = bankTotals.amount();
         BigDecimal op = nz(orangeTransactionRepository.sumSuccessAmountByTransactionDateRange(from, to));
         BigDecimal diff = bank.subtract(op);
-        return new CompensationDailyDto(d, OperatorType.ORANGE, opCount, bankCount, op, bank, diff, decision(diff), null);
+        return new CompensationDailyDto(d, OperatorType.ORANGE, opCount, bankTotals.count(), op, bank, diff, decision(diff), null);
     }
 
     private String decision(BigDecimal diff) {
@@ -114,5 +119,50 @@ public class CompensationServiceImpl implements CompensationService {
 
     private BigDecimal nz(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private BankSuccessTotals bankSuccessTotals(LocalDateTime from, LocalDateTime to, OperatorType operator) {
+        List<BankTransaction> rows = bankTransactionRepository.findByAllocationStatusAndTransactionDateRangeAndOperator(
+                NormalizedBankStatus.SUCCESS_BANK,
+                from,
+                to,
+                operator
+        );
+        List<BankTransaction> compensableRows = rows.stream()
+                .filter(this::isCompensableBankSuccess)
+                .toList();
+        BigDecimal amount = compensableRows.stream()
+                .map(BankTransaction::getAmount)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return new BankSuccessTotals(compensableRows.size(), amount);
+    }
+
+    private boolean isCompensableBankSuccess(BankTransaction bank) {
+        return bank != null
+                && bank.getAllocationStatusNormalized() == NormalizedBankStatus.SUCCESS_BANK
+                && !isGeneratedOrIssuedBankStatus(bank.getAllocationStatusRaw());
+    }
+
+    private boolean isGeneratedOrIssuedBankStatus(String raw) {
+        String key = normalizeStatusKey(raw);
+        return key.equals("paiementgenere")
+                || key.equals("payementgenere")
+                || key.equals("paymentissued")
+                || key.equals("payementissued")
+                || key.equals("paymentissuer")
+                || key.equals("payementissuer");
+    }
+
+    private String normalizeStatusKey(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String normalized = Normalizer.normalize(raw, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "");
+        return normalized.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+    }
+
+    private record BankSuccessTotals(long count, BigDecimal amount) {
     }
 }

@@ -15,8 +15,10 @@ public class StatusNormalizationService {
             return NormalizedBankStatus.UNKNOWN_BANK;
         }
         String v = normalizeText(raw);
-        if (v.equals("alloue") || v.equals("paiement genere")
-                || v.equals("allocated") || v.equals("deallocated") || v.equals("paymentissued")) {
+        if (v.equals("alloue") || v.equals("paiement genere") || v.equals("payement genere")
+                || v.equals("allocated") || v.equals("deallocated")
+                || v.equals("paymentissued") || v.equals("payment issued")
+                || v.equals("payementissued") || v.equals("payement issued")) {
             return NormalizedBankStatus.SUCCESS_BANK;
         }
         if (v.equals("non alloue") || v.equals("paiement rejete") || v.equals("echec allocation")

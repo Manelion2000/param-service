@@ -9,6 +9,8 @@ import com.bakouan.app.enums.NormalizedOrangeStatus;
 import com.bakouan.app.enums.ReconciliationResultType;
 import com.bakouan.app.repositories.AmplitudeTransactionRepository;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mockito;
 
 import java.math.BigDecimal;
@@ -60,6 +62,36 @@ class ReconciliationClassificationServiceTest {
                 .build();
 
         assertEquals(ReconciliationResultType.MATCH_OK, service.classify(bank, orange));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"Paiement genere", "Payement genere", "PaymentIssued", "Payment Issued"})
+    void shouldClassifyGeneratedOrIssuedBankAndFailedMoovAsBothSidesFailed(String bankStatus) {
+        BankTransaction bank = BankTransaction.builder()
+                .allocationStatusRaw(bankStatus)
+                .allocationStatusNormalized(NormalizedBankStatus.SUCCESS_BANK)
+                .amount(new BigDecimal("1000"))
+                .build();
+        MoovTransaction moov = MoovTransaction.builder()
+                .transactionStatusNormalized(NormalizedMoovStatus.FAILED_MOOV)
+                .amount(new BigDecimal("900"))
+                .build();
+
+        assertEquals(ReconciliationResultType.ECHEC_DES_DEUX_COTES, service.classify(bank, moov));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"Paiement genere", "Payement genere", "PaymentIssued", "Payment Issued"})
+    void shouldClassifyGeneratedOrIssuedBankAndFailedOrangeAsBothSidesFailed(String bankStatus) {
+        BankTransaction bank = BankTransaction.builder()
+                .allocationStatusRaw(bankStatus)
+                .allocationStatusNormalized(NormalizedBankStatus.SUCCESS_BANK)
+                .build();
+        OrangeTransaction orange = OrangeTransaction.builder()
+                .transactionStatusNormalized(NormalizedOrangeStatus.FAILED_ORANGE)
+                .build();
+
+        assertEquals(ReconciliationResultType.ECHEC_DES_DEUX_COTES, service.classify(bank, orange));
     }
 
     @Test

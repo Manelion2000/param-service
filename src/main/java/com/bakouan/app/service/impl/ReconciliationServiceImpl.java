@@ -18,6 +18,7 @@ import com.bakouan.app.service.ReconciliationService;
 import com.bakouan.app.service.reconciliation.ReconciliationOperatorStrategy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
@@ -56,6 +57,9 @@ public class ReconciliationServiceImpl implements ReconciliationService {
         ReconciliationOperatorStrategy strategy = selectedStrategy(operator);
         List<FileImport> operatorImports = strategy.findImports(from, to);
         validateRunInputs(operator, from, to, bankImports, operatorImports);
+
+        bankImports = validImports(bankImports);
+        operatorImports = validImports(operatorImports);
 
         String bankImportIds = importIdsCsv(bankImports);
         String operatorImportIds = importIdsCsv(operatorImports);
@@ -134,24 +138,7 @@ public class ReconciliationServiceImpl implements ReconciliationService {
     @Override
     public Page<ReconciliationResult> globalResults(LocalDate dateFrom, LocalDate dateTo, ReconciliationResultType type, OperatorType operator, Pageable pageable) {
         if (operator != null) {
-            Optional<Long> latestRunId = findLatestRunId(operator, dateFrom, dateTo);
-            if (latestRunId.isPresent()) {
-                Specification<ReconciliationResult> latestRunSpec = (root, query, cb) ->
-                        cb.equal(root.get("run").get("id"), latestRunId.get());
-                Specification<ReconciliationResult> typeSpec = type == null ? null : (root, query, cb) -> {
-                    if (type == ReconciliationResultType.ABSENT_COTE_MOOV) {
-                        return cb.or(
-                                cb.equal(root.get("resultType"), ReconciliationResultType.ABSENT_COTE_MOOV),
-                                cb.equal(root.get("resultType"), ReconciliationResultType.ABSENT_COTE_ORANGE)
-                        );
-                    }
-                    return cb.equal(root.get("resultType"), type);
-                };
-                Specification<ReconciliationResult> finalSpec = typeSpec == null
-                        ? latestRunSpec
-                        : latestRunSpec.and(typeSpec);
-                return resultRepository.findAll(finalSpec, pageable);
-            }
+            return page(latestGlobalRows(dateFrom, dateTo, type, operator), pageable);
         }
         return resultRepository.findAll(globalSpec(dateFrom, dateTo, type, operator), pageable);
     }
@@ -159,30 +146,62 @@ public class ReconciliationServiceImpl implements ReconciliationService {
     @Override
     public ReconciliationSummaryDto globalSummary(LocalDate dateFrom, LocalDate dateTo, OperatorType operator) {
         if (operator != null) {
-            Optional<Long> latestRunId = findLatestRunId(operator, dateFrom, dateTo);
-            if (latestRunId.isPresent()) {
-                List<ReconciliationResult> rows = resultRepository.findByRunId(latestRunId.get(), Pageable.unpaged()).getContent();
-                return buildSummary(rows);
-            }
+            return buildSummary(latestGlobalRows(dateFrom, dateTo, null, operator));
         }
         List<ReconciliationResult> rows = resultRepository.findAll(globalSpec(dateFrom, dateTo, null, operator));
         return buildSummary(rows);
     }
 
-    private Optional<Long> findLatestRunId(OperatorType operator, LocalDate dateFrom, LocalDate dateTo) {
-        List<ReconciliationRun> runs;
-        if (dateFrom != null && dateTo != null) {
-            runs = runRepository.findByOperatorAndBusinessDateOverlap(operator, dateFrom, dateTo, Pageable.unpaged()).getContent();
-        } else {
-            runs = runRepository.findByOperator(operator, Pageable.unpaged()).getContent();
+    private List<ReconciliationResult> latestGlobalRows(LocalDate dateFrom, LocalDate dateTo, ReconciliationResultType type, OperatorType operator) {
+        List<ReconciliationRun> runs = completedRunsWithResults(operator);
+        if (runs.isEmpty()) {
+            return List.of();
         }
+        Set<Long> runIds = runs.stream()
+                .map(ReconciliationRun::getId)
+                .collect(Collectors.toSet());
+        List<ReconciliationResult> candidateRows = resultRepository.findByRunIdIn(runIds).stream()
+                .filter(row -> matchesBusinessDate(row, dateFrom, dateTo))
+                .toList();
+        Map<LocalDate, Long> latestRunIdByResultDate = latestRunIdByResultBusinessDate(candidateRows);
+        return candidateRows.stream()
+                .filter(row -> {
+                    LocalDate businessDate = row.getBusinessDate();
+                    return businessDate != null
+                            && Objects.equals(latestRunIdByResultDate.get(businessDate), row.getRun().getId());
+                })
+                .filter(row -> matchesResultType(row, type))
+                .sorted(Comparator
+                        .comparing(ReconciliationResult::getBusinessDate, Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(row -> row.getId() == null ? Long.MAX_VALUE : row.getId()))
+                .toList();
+    }
+
+    private List<ReconciliationRun> completedRunsWithResults(OperatorType operator) {
+        List<ReconciliationRun> runs = runRepository.findByOperator(operator, Pageable.unpaged()).getContent();
         return runs.stream()
                 .filter(r -> r.getStatus() == ReconciliationRunStatus.COMPLETED)
                 .filter(r -> r.getId() != null)
                 .filter(r -> r.getStartedAt() != null)
                 .filter(r -> resultRepository.countByRunId(r.getId()) > 0)
-                .max(Comparator.comparing(ReconciliationRun::getStartedAt))
-                .map(ReconciliationRun::getId);
+                .toList();
+    }
+
+    private Map<LocalDate, Long> latestRunIdByResultBusinessDate(List<ReconciliationResult> rows) {
+        Map<LocalDate, ReconciliationRun> latestByDate = new HashMap<>();
+        rows.forEach(row -> {
+            LocalDate businessDate = row.getBusinessDate();
+            ReconciliationRun run = row.getRun();
+            if (businessDate == null || run == null || run.getId() == null || run.getStartedAt() == null) {
+                return;
+            }
+            ReconciliationRun current = latestByDate.get(businessDate);
+            if (current == null || isStartedAfter(run, current)) {
+                latestByDate.put(businessDate, run);
+            }
+        });
+        return latestByDate.entrySet().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().getId()));
     }
 
     private ReconciliationSummaryDto buildSummary(List<ReconciliationResult> rows) {
@@ -334,9 +353,17 @@ public class ReconciliationServiceImpl implements ReconciliationService {
 
     private boolean hasValidRows(List<FileImport> imports) {
         return imports.stream()
-                .map(FileImport::getValidRows)
-                .filter(Objects::nonNull)
-                .anyMatch(count -> count > 0);
+                .anyMatch(this::hasValidRows);
+    }
+
+    private boolean hasValidRows(FileImport importRow) {
+        return importRow != null && importRow.getValidRows() != null && importRow.getValidRows() > 0;
+    }
+
+    private List<FileImport> validImports(List<FileImport> imports) {
+        return imports.stream()
+                .filter(this::hasValidRows)
+                .toList();
     }
 
     private String importIdsCsv(List<FileImport> imports) {
@@ -363,6 +390,42 @@ public class ReconciliationServiceImpl implements ReconciliationService {
 
     private String periodLabel(LocalDate from, LocalDate to) {
         return Objects.equals(from, to) ? String.valueOf(from) : from + " -> " + to;
+    }
+
+    private boolean isStartedAfter(ReconciliationRun candidate, ReconciliationRun current) {
+        return Comparator.comparing(ReconciliationRun::getStartedAt, Comparator.nullsFirst(Comparator.naturalOrder()))
+                .compare(candidate, current) > 0;
+    }
+
+    private boolean matchesBusinessDate(ReconciliationResult row, LocalDate dateFrom, LocalDate dateTo) {
+        LocalDate businessDate = row.getBusinessDate();
+        if (businessDate == null) {
+            return false;
+        }
+        if (dateFrom != null && businessDate.isBefore(dateFrom)) {
+            return false;
+        }
+        return dateTo == null || !businessDate.isAfter(dateTo);
+    }
+
+    private boolean matchesResultType(ReconciliationResult row, ReconciliationResultType type) {
+        if (type == null) {
+            return true;
+        }
+        if (type == ReconciliationResultType.ABSENT_COTE_MOOV) {
+            return row.getResultType() == ReconciliationResultType.ABSENT_COTE_MOOV
+                    || row.getResultType() == ReconciliationResultType.ABSENT_COTE_ORANGE;
+        }
+        return row.getResultType() == type;
+    }
+
+    private Page<ReconciliationResult> page(List<ReconciliationResult> rows, Pageable pageable) {
+        if (pageable.isUnpaged()) {
+            return new PageImpl<>(rows);
+        }
+        int start = Math.toIntExact(Math.min(pageable.getOffset(), rows.size()));
+        int end = Math.min(start + pageable.getPageSize(), rows.size());
+        return new PageImpl<>(rows.subList(start, end), pageable, rows.size());
     }
 
 }
